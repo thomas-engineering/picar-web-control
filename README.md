@@ -149,6 +149,19 @@ the onboard radio off while the adapter is connected, and back on if the adapter
 the two radios' MAC addresses in `deploy/wifi/picar-wifi-select`; edit them, then run
 `sudo deploy/wifi/install.sh` on the Pi.
 
+## Tools
+
+`tools/` holds development helpers (they are not deployed to the Pi's service):
+
+| Script | Purpose |
+|---|---|
+| `mock_server.py` | Run the real server on a PC with fake hardware and a synthetic camera |
+| `lag_test.py` | Measure control latency, ping loss and the Pi's load while video streams over Wi-Fi |
+| `slow_viewer.py` | Check that the video byte budget shrinks for a slow viewer |
+| `pi_probe.sh` | Sampler that `lag_test.py --ssh` runs on the Pi |
+
+Each script's docstring shows how to run it.
+
 ## License
 
 [MIT](LICENSE)
