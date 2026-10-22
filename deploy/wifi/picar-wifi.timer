@@ -1,0 +1,9 @@
+[Unit]
+Description=Re-check which Wi-Fi radio to use
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=20
+
+[Install]
+WantedBy=timers.target

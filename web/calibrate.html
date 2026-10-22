@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<title>PiCar calibration</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="page">
+<main>
+  <header>
+    <h1>Calibration</h1>
+    <span class="pill"><span class="dot" id="dot"></span><span id="conn">connecting</span></span>
+    <a href="index.html"><button>Back to driving</button></a>
+  </header>
+  <p class="hint" style="color:var(--muted);margin:0">
+    Changes are applied to the car at once and saved on the Pi. This page takes over the controls
+    from the driving page; use "Take control back" there afterwards. Keep the wheels off the
+    ground while testing the motors.
+  </p>
+  <div id="msg"></div>
+
+  <div class="cards">
+    <section class="card">
+      <h2>Steering</h2>
+      <div class="field">
+        <div class="head"><span>Test position</span><output id="t_steer_out">0%</output></div>
+        <input id="t_steer" type="range" min="-1" max="1" step="0.01" value="0">
+      </div>
+      <button id="t_steer_center">Centre</button>
+      <div id="f_steering"></div>
+    </section>
+
+    <section class="card">
+      <h2>Camera</h2>
+      <div class="field">
+        <div class="head"><span>Test pan</span><output id="t_pan_out">90°</output></div>
+        <input id="t_pan" type="range" min="0" max="180" step="1" value="90">
+      </div>
+      <div class="field">
+        <div class="head"><span>Test tilt</span><output id="t_tilt_out">90°</output></div>
+        <input id="t_tilt" type="range" min="0" max="180" step="1" value="90">
+      </div>
+      <button id="t_center">Centre camera</button>
+      <div id="f_camera"></div>
+    </section>
+
+    <section class="card">
+      <h2>Motors</h2>
+      <p class="hint">Hold a button to run both motors at the maximum or the minimum speed set below.
+        At the minimum the wheels should just turn reliably; raise it if they only hum.
+        If a wheel turns the wrong way for forward, tick its box.</p>
+      <div class="holdrow">
+        <button id="hold_fwd">Hold: forward, max</button>
+        <button id="hold_back">Hold: reverse, max</button>
+        <button id="hold_fwd_min">Hold: forward, min</button>
+        <button id="hold_back_min">Hold: reverse, min</button>
+      </div>
+      <label class="toggle"><span>Invert left motor</span><input type="checkbox" id="invert_left"></label>
+      <label class="toggle"><span>Invert right motor</span><input type="checkbox" id="invert_right"></label>
+      <div id="f_motors"></div>
+    </section>
+  </div>
+</main>
+
+<script src="link.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+
+// [key, label, min, max, step, unit]
+const GROUPS = {
+  f_steering: [
+    ["steering_trim", "Steering trim", -30, 30, 0.5, "°"],
+    ["steering_range", "Steering travel each side", 5, 60, 1, "°"],
+  ],
+  f_camera: [
+    ["pan_trim", "Pan trim", -30, 30, 0.5, "°"],
+    ["tilt_trim", "Tilt trim", -30, 30, 0.5, "°"],
+    ["pan_min", "Pan minimum", 0, 180, 1, "°"],
+    ["pan_max", "Pan maximum", 0, 180, 1, "°"],
+    ["tilt_min", "Tilt minimum", 0, 180, 1, "°"],
+    ["tilt_max", "Tilt maximum", 0, 180, 1, "°"],
+  ],
+  f_motors: [
+    ["min_speed", "Minimum speed (below it the motors only hum)", 0, 100, 1, "%"],
+    ["max_speed", "Maximum speed", 0, 100, 1, "%"],
+  ],
+};
+
+const msg = $("msg");
+function say(text, cls = "") { msg.textContent = text; msg.className = cls; }
+
+let pending = {}, timer = 0;
+async function save(change) {
+  Object.assign(pending, change);
+  clearTimeout(timer);
+  timer = setTimeout(async () => {
+    const body = pending;
+    pending = {};
+    try {
+      const r = await fetch("/api/calibration", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      if (r.ok) { say("Saved", "ok"); fill(await r.json()); }
+      else { say((await r.json()).detail?.toString() || "Rejected", "bad"); load(); }
+    } catch { say("Could not reach the car", "bad"); }
+  }, 250);
+}
+
+const inputs = {};
+for (const [group, fields] of Object.entries(GROUPS)) {
+  for (const [key, label, min, max, step, unit] of fields) {
+    const el = document.createElement("div");
+    el.className = "field";
+    el.innerHTML = `<div class="head"><span>${label}</span><output></output></div>
+      <input type="range" min="${min}" max="${max}" step="${step}">`;
+    const input = el.querySelector("input"), out = el.querySelector("output");
+    const show = () => { out.textContent = input.value + unit; };
+    input.addEventListener("input", () => { show(); save({ [key]: parseFloat(input.value) }); });
+    inputs[key] = { input, show };
+    $(group).appendChild(el);
+  }
+}
+for (const key of ["invert_left", "invert_right"]) {
+  inputs[key] = { input: $(key) };
+  $(key).addEventListener("change", () => save({ [key]: $(key).checked }));
+}
+
+function fill(cal) {
+  for (const name of ["pan", "tilt"]) {
+    $("t_" + name).min = cal[name + "_min"];
+    $("t_" + name).max = cal[name + "_max"];
+  }
+  for (const [key, { input, show }] of Object.entries(inputs)) {
+    if (input.type === "checkbox") input.checked = cal[key];
+    else { input.value = cal[key]; show(); }
+  }
+}
+async function load() {
+  try { fill(await (await fetch("/api/calibration")).json()); }
+  catch { say("Could not load the calibration", "bad"); }
+}
+
+// Live tests go through the normal control socket.
+const test = { throttle: 0 };
+const steer = $("t_steer");
+steer.addEventListener("input", () => { $("t_steer_out").textContent = Math.round(steer.value * 100) + "%"; });
+$("t_steer_center").onclick = () => { steer.value = 0; $("t_steer_out").textContent = "0%"; };
+for (const name of ["pan", "tilt"]) {
+  const s = $("t_" + name);
+  s.addEventListener("input", () => {
+    $("t_" + name + "_out").textContent = s.value + "°";
+    link.setDirty({ [name]: parseFloat(s.value) });
+  });
+}
+$("t_center").onclick = () => link.setDirty({ center_camera: true });
+// 0.05 is the server's deadzone edge, where the duty is exactly the minimum speed.
+for (const [id, value] of [["hold_fwd", 1], ["hold_back", -1], ["hold_fwd_min", 0.05], ["hold_back_min", -0.05]]) {
+  const b = $(id);
+  b.addEventListener("pointerdown", e => { b.setPointerCapture(e.pointerId); test.throttle = value; });
+  for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
+    b.addEventListener(type, () => { test.throttle = 0; });
+  }
+}
+window.addEventListener("blur", () => { test.throttle = 0; });
+// Leave the car straight and stopped; the server does not centre the steering by itself.
+window.addEventListener("pagehide", () => {
+  if (link.open) link.ws.send(JSON.stringify({ steer: 0, throttle: 0 }));
+});
+
+const link = new Link({
+  build: () => ({ steer: parseFloat(steer.value), throttle: test.throttle }),
+  onStatus: s => {
+    $("dot").className = "dot" + (s === "open" ? " ok" : "");
+    $("conn").textContent = s === "open" ? "connected" : s === "taken" ? "taken over" : s;
+  },
+  onState: m => {
+    for (const name of ["pan", "tilt"]) {
+      const s = $("t_" + name);
+      [s.min, s.max] = m.limits[name];
+      s.value = m[name];
+      $("t_" + name + "_out").textContent = Math.round(m[name]) + "°";
+    }
+  },
+});
+load();
+</script>
+</body>
+</html>

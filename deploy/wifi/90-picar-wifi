@@ -1,0 +1,6 @@
+#!/bin/sh
+# NetworkManager dispatcher hook: re-evaluate which Wi-Fi radio to use.
+case "$2" in
+    up|down|connectivity-change) setsid /usr/local/sbin/picar-wifi-select >/dev/null 2>&1 & ;;
+esac
+exit 0

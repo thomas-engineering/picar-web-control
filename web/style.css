@@ -1,0 +1,277 @@
+:root {
+  --bg: #0b0d10;
+  --panel: #161a20;
+  --panel-2: #1f252d;
+  --line: #2c343f;
+  --text: #e8ecf1;
+  --muted: #8d99a8;
+  --accent: #4da3ff;
+  --ok: #3ecf8e;
+  --warn: #f5b942;
+  --bad: #ff5d5d;
+  /* joystick size: scales with the screen, from small phones to large tablets and monitors */
+  --pad: clamp(120px, min(36vw, 42vh), 240px);
+  --knob: calc(var(--pad) * 0.42);
+  --gutter: max(16px, env(safe-area-inset-left));
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overscroll-behavior: none;
+}
+
+body { overflow: hidden; }
+
+button, input { font: inherit; color: inherit; }
+
+button {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  min-height: 44px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button:active { background: var(--line); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #04121f; font-weight: 600; }
+
+/* ---------- driving screen ---------- */
+
+#app {
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#stage {
+  position: relative;
+  background: #000;
+  aspect-ratio: 4 / 3;
+  width: 100%;
+  max-height: 60dvh;
+  margin: 0 auto;
+  overflow: hidden;
+}
+#video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+#novideo {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  text-align: center;
+  padding: 16px;
+  pointer-events: none;
+}
+#novideo[hidden] { display: none; }
+
+#topbar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left));
+  background: linear-gradient(#000a, transparent);
+  z-index: 5;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #000a;
+  border: 1px solid #fff2;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); flex: none; }
+.dot.ok { background: var(--ok); }
+.dot.warn { background: var(--warn); }
+#topbar .spacer { flex: 1; }
+.iconbtn { min-height: 38px; min-width: 38px; padding: 6px 10px; background: #000a; border-color: #fff2; }
+
+#controls {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 12px var(--gutter) max(16px, env(safe-area-inset-bottom));
+  min-height: 0;
+}
+
+.pad-wrap { display: grid; justify-items: center; gap: 8px; }
+.pad-label { color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+
+.pad {
+  position: relative;
+  width: var(--pad);
+  height: var(--pad);
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffffff10 0, #ffffff08 60%, #ffffff14 100%);
+  border: 2px solid #ffffff30;
+  touch-action: none;
+}
+.pad::before, .pad::after {  /* crosshair */
+  content: "";
+  position: absolute;
+  background: #ffffff18;
+}
+.pad::before { left: 50%; top: 12%; bottom: 12%; width: 1px; }
+.pad::after { top: 50%; left: 12%; right: 12%; height: 1px; }
+.knob {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: var(--knob); height: var(--knob);
+  margin: calc(var(--knob) / -2) 0 0 calc(var(--knob) / -2);
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #8cc4ff, var(--accent) 70%);
+  box-shadow: 0 4px 14px #0008;
+  pointer-events: none;
+  z-index: 1;
+}
+.pad.active { border-color: var(--accent); }
+
+#center-controls {
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+  width: min(100%, 260px);
+}
+.speed { width: 100%; }
+.speed label { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+.speed output { color: var(--text); font-variant-numeric: tabular-nums; }
+#stop { width: 100%; background: #3a1a1a; border-color: #6a2a2a; }
+
+input[type=range] {
+  width: 100%;
+  height: 32px;
+  background: transparent;
+  accent-color: var(--accent);
+}
+
+/* Landscape: the video fills the screen and the controls float over it. */
+@media (orientation: landscape) {
+  #app { display: block; position: relative; }
+  #stage { position: absolute; inset: 0; width: 100%; max-height: none; aspect-ratio: auto; }
+  #controls {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    padding: 0 max(var(--gutter), env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(var(--gutter), env(safe-area-inset-left));
+    align-items: end;
+    pointer-events: none;
+    z-index: 4;
+  }
+  #controls > * { pointer-events: auto; }
+  #center-controls { align-self: end; width: min(100%, 220px); background: #000a; border-radius: 14px; padding: 10px 12px; }
+  .pad-label { text-shadow: 0 1px 4px #000; color: #cfd6df; }
+  .speed label { color: #cfd6df; text-shadow: 0 1px 4px #000; }
+  #stop { background: #3a1a1acc; }
+}
+
+/* Short landscape screens (phones): smaller pads so they do not cover the picture. */
+@media (orientation: landscape) and (max-height: 480px) {
+  :root { --pad: clamp(110px, 40vh, 170px); }
+  .pad-label { display: none; }
+  #center-controls { gap: 8px; }
+  #stop { min-height: 38px; }
+}
+
+/* Tall tablets and big portrait windows: give the video more room. */
+@media (orientation: portrait) and (min-width: 700px) {
+  :root { --pad: clamp(160px, min(30vw, 28vh), 280px); }
+  #stage { max-height: 62dvh; }
+}
+
+/* Narrow portrait: stack the centre column under the pads. */
+@media (orientation: portrait) and (max-width: 520px) {
+  #controls {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto;
+    align-content: center;
+    --pad: clamp(120px, 40vw, 190px);
+  }
+  #center-controls { grid-column: 1 / -1; grid-row: 2; width: min(100%, 360px); grid-template-columns: 1fr auto; align-items: end; gap: 12px; }
+  #stop { width: auto; padding: 10px 20px; }
+}
+
+/* ---------- panels (settings dialog, calibration page) ---------- */
+
+dialog {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 0;
+  width: min(480px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+}
+dialog::backdrop { background: #000a; }
+.sheet { padding: 18px; display: grid; gap: 16px; }
+.sheet h2 { margin: 0; font-size: 18px; }
+.sheet-head { display: flex; justify-content: space-between; align-items: center; }
+.field { display: grid; gap: 4px; }
+.field > .head { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; }
+.field output { color: var(--text); font-variant-numeric: tabular-nums; }
+.toggle { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 40px; }
+.toggle input { width: 22px; height: 22px; accent-color: var(--accent); }
+.stats { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; margin: 0; }
+a { color: var(--accent); }
+
+#takeover {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 14px;
+  background: #000d;
+  text-align: center;
+  padding: 24px;
+}
+#takeover[hidden] { display: none; }
+
+/* ---------- calibration page ---------- */
+
+body.page { overflow: auto; }
+.page main {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: max(16px, env(safe-area-inset-top)) 16px 32px;
+  display: grid;
+  gap: 16px;
+}
+.page header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.page h1 { margin: 0; font-size: 22px; flex: 1; }
+.cards { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 14px; align-content: start; }
+.card h2 { margin: 0; font-size: 16px; }
+.card .hint { margin: 0; color: var(--muted); font-size: 13px; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.holdrow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.holdrow button { min-height: 56px; touch-action: none; user-select: none; -webkit-user-select: none; }
+#msg { min-height: 1.4em; color: var(--muted); }
+#msg.bad { color: var(--bad); }
+#msg.ok { color: var(--ok); }
+.toggle small { color: var(--muted); display: block; font-size: 12px; }

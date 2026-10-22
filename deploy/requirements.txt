@@ -1,0 +1,5 @@
+smbus2
+gpiozero
+fastapi
+uvicorn
+websockets

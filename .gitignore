@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+
+# the Pi's own calibration, written by the calibration page
+data/
+
+# downloaded tools
+imager/
+*.AppImage

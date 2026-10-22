@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b0d10">
+<title>PiCar</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <section id="stage">
+    <img id="video" alt="">
+    <div id="novideo">Waiting for video...</div>
+    <div id="topbar">
+      <span class="pill"><span class="dot" id="dot"></span><span id="conn">connecting</span></span>
+      <span class="spacer"></span>
+      <button class="iconbtn" id="open-settings" aria-label="Settings">Settings</button>
+    </div>
+    <div id="takeover" hidden>
+      <div>Another device took over the controls.</div>
+      <button class="primary" id="retake">Take control back</button>
+    </div>
+  </section>
+
+  <section id="controls">
+    <div class="pad-wrap">
+      <div class="pad" id="drive"><div class="knob"></div></div>
+      <div class="pad-label">Drive &middot; steer / throttle</div>
+    </div>
+
+    <div id="center-controls">
+      <div class="speed">
+        <label for="speed">Speed limit <output id="speed_out">60%</output></label>
+        <input id="speed" type="range" min="10" max="100" step="5" value="60">
+      </div>
+      <button id="stop">STOP</button>
+    </div>
+
+    <div class="pad-wrap">
+      <div class="pad" id="cam"><div class="knob"></div></div>
+      <div class="pad-label">Camera &middot; pan / tilt</div>
+    </div>
+  </section>
+</div>
+
+<dialog id="settings">
+  <div class="sheet">
+    <div class="sheet-head"><h2>Settings</h2><button id="close-settings">Close</button></div>
+
+    <div class="field">
+      <div class="head"><span>Camera pan</span><output id="pan_out">90&deg;</output></div>
+      <input id="pan" type="range" min="0" max="180" step="1" value="90">
+    </div>
+    <div class="field">
+      <div class="head"><span>Camera tilt</span><output id="tilt_out">90&deg;</output></div>
+      <input id="tilt" type="range" min="0" max="180" step="1" value="90">
+    </div>
+    <button id="center">Centre camera</button>
+
+    <label class="toggle"><span>Max camera resolution <small id="res_note"></small></span><input type="checkbox" id="max_res"></label>
+    <label class="toggle"><span>Invert camera pan</span><input type="checkbox" id="inv_pan"></label>
+    <label class="toggle"><span>Invert camera tilt</span><input type="checkbox" id="inv_tilt"></label>
+    <label class="toggle"><span>Invert steering</span><input type="checkbox" id="inv_steer"></label>
+
+    <p class="stats" id="stats">no data yet</p>
+    <p class="stats">Keyboard: W A S D or arrows to drive, I J K L for the camera, C centres it, space stops.</p>
+    <a href="calibrate.html">Calibration page</a>
+  </div>
+</dialog>
+
+<script src="link.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

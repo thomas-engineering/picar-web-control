@@ -1,0 +1,36 @@
+#!/bin/bash
+# Prefer the USB Wi-Fi adapter. While it is connected the onboard radio is switched off;
+# when it is unplugged or loses its connection the onboard radio takes over again.
+# Idempotent: runs from the NetworkManager dispatcher and from a timer.
+set -u
+DONGLE_MAC=ac:15:a2:a3:0f:0e
+ONBOARD_MAC=b8:27:eb:a2:7c:fd
+
+exec 9>/run/picar-wifi.lock
+flock -n 9 || exit 0
+
+dev_by_mac() {
+    local d
+    for d in /sys/class/net/*; do
+        if [ "$(cat "$d/address" 2>/dev/null)" = "$1" ]; then
+            basename "$d"
+            return
+        fi
+    done
+}
+
+# NetworkManager device state: 20 unavailable, 30 disconnected, 40-90 connecting, 100 connected
+state() { nmcli -g GENERAL.STATE device show "$1" 2>/dev/null | cut -d' ' -f1; }
+
+onboard=$(dev_by_mac "$ONBOARD_MAC")
+[ -n "$onboard" ] || exit 0
+dongle=$(dev_by_mac "$DONGLE_MAC")
+
+if [ -n "$dongle" ] && [ "$(state "$dongle")" = 100 ]; then
+    [ "$(state "$onboard")" = 30 ] || nmcli device disconnect "$onboard"
+else
+    case "$(state "$onboard")" in
+        100|40|50|60|70|80|90) ;;
+        *) nmcli device connect "$onboard" ;;
+    esac
+fi

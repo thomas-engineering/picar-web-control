@@ -1,0 +1,15 @@
+[Unit]
+Description=PiCar web control server
+After=network.target
+
+[Service]
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=__DIR__/.venv/bin/python -m server.run 8000
+# The server stops the motors on SIGTERM; a crash is restarted, which also stops them.
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

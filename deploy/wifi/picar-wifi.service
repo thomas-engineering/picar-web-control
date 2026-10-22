@@ -1,0 +1,7 @@
+[Unit]
+Description=Choose between USB and onboard Wi-Fi
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/picar-wifi-select
