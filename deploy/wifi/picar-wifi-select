@@ -3,16 +3,20 @@
 # when it is unplugged or loses its connection the onboard radio takes over again.
 # Idempotent: runs from the NetworkManager dispatcher and from a timer.
 set -u
-DONGLE_MAC=ac:15:a2:a3:0f:0e
-ONBOARD_MAC=b8:27:eb:a2:7c:fd
-
 exec 9>/run/picar-wifi.lock
 flock -n 9 || exit 0
 
-dev_by_mac() {
-    local d
+# First Wi-Fi interface that is (usb) or is not (onboard) attached to the USB bus. Interface names
+# like wlan0 and wlan1 can swap between boots, so the bus is used instead.
+wifi_dev() {
+    local d bus
     for d in /sys/class/net/*; do
-        if [ "$(cat "$d/address" 2>/dev/null)" = "$1" ]; then
+        [ -d "$d/wireless" ] || [ -d "$d/phy80211" ] || continue
+        bus=$(basename "$(readlink -f "$d/device/subsystem" 2>/dev/null)")
+        if [ "$1" = usb ] && [ "$bus" = usb ]; then
+            basename "$d"
+            return
+        elif [ "$1" = onboard ] && [ "$bus" != usb ]; then
             basename "$d"
             return
         fi
@@ -22,9 +26,9 @@ dev_by_mac() {
 # NetworkManager device state: 20 unavailable, 30 disconnected, 40-90 connecting, 100 connected
 state() { nmcli -g GENERAL.STATE device show "$1" 2>/dev/null | cut -d' ' -f1; }
 
-onboard=$(dev_by_mac "$ONBOARD_MAC")
+onboard=$(wifi_dev onboard)
 [ -n "$onboard" ] || exit 0
-dongle=$(dev_by_mac "$DONGLE_MAC")
+dongle=$(wifi_dev usb)
 
 if [ -n "$dongle" ] && [ "$(state "$dongle")" = 100 ]; then
     [ "$(state "$onboard")" = 30 ] || nmcli device disconnect "$onboard"

@@ -144,10 +144,11 @@ the kernel holds back at most 16 KB of unsent data per connection (`TCP_NOTSENT_
 up (`Camera.mjpeg`). A better signal at the car still helps most: a USB extension cable for the
 adapter, or a closer router.
 
-`deploy/wifi/` is optional and specific to one setup: it prefers a USB Wi-Fi adapter and switches
-the onboard radio off while the adapter is connected, and back on if the adapter drops. It hard-codes
-the two radios' MAC addresses in `deploy/wifi/picar-wifi-select`; edit them, then run
-`sudo deploy/wifi/install.sh` on the Pi.
+`deploy/wifi/` is optional: it prefers a USB Wi-Fi adapter and switches the onboard radio off while
+the adapter is connected, and back on if the adapter drops. It finds the radios by how they are
+attached (any Wi-Fi interface on USB is the adapter, the other one is the onboard radio), so it
+needs no configuration. Install it with `sudo deploy/wifi/install.sh` on the Pi. It assumes
+NetworkManager and one onboard plus one USB Wi-Fi interface.
 
 ## Tools
 
