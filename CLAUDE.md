@@ -31,9 +31,9 @@ vanilla-JS page in `web/` (no build step, no framework). See README.md for the f
   cap. `tools/follow_e2e.py` checks all of this; run it after any change to `control.py`,
   `follower.py` or `app.py`.
 - Follow mode drives only with `PICAR_FOLLOW_DRIVE=1` set for the service; by default only the camera
-  follows. The pan and tilt directions in `follow_control.py` were checked on the car (camera only);
-  the steering and speed are not. Ask before enabling driving, and keep the wheels off the ground for
-  the first run.
+  follows. The camera directions and, with the wheels off the ground, the steering direction, forward
+  drive, speed and stop checks were verified on the car; driving on the floor was not. Ask before
+  enabling driving, and keep the wheels off the ground until the floor test is agreed.
 
 ## Conventions
 - Match the existing style: short docstrings, comments only for the why, no new dependencies
