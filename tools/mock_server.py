@@ -4,7 +4,7 @@
     python -m venv .venv-dev && .venv-dev/bin/pip install fastapi "uvicorn[standard]" opencv-python-headless numpy websockets
     .venv-dev/bin/python tools/mock_server.py [port]      # then open http://localhost:8765
 
-Servo and motor calls are discarded and the "camera" draws a moving circle. The calibration is
+Servo and motor calls are discarded and the "camera" draws the moving balls of tools/synthetic_scene.py. The calibration is
 kept in a temporary file, so the Pi's data/ folder is never touched.
 """
 import os
@@ -18,6 +18,9 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from synthetic_scene import render  # noqa: E402
 
 # The Pi-only modules are replaced before the server imports them.
 sys.modules["smbus2"] = types.SimpleNamespace(
@@ -61,9 +64,7 @@ class FakeCapture:
     def read(self):
         time.sleep(1 / 15)
         width, height = self.size
-        image = np.full((height, width, 3), (60, 40, 30), np.uint8)
-        x = width // 2 + int(width / 4 * np.sin(self.frame / 10))
-        cv2.circle(image, (x, height // 2), height // 8, (80, 200, 255), -1)
+        image, _ = render(self.frame, self.size)
         cv2.putText(image, "MOCK %dx%d" % self.size, (10, height - 12), cv2.FONT_HERSHEY_SIMPLEX, height / 300, (255, 255, 255), 2)
         self.frame += 1
         return True, image
