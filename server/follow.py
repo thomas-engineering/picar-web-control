@@ -7,6 +7,7 @@ has drifted onto something else, and the colours find the object again after a l
 Nothing here touches hardware, so it can be tested offline (tools/track_test.py,
 tools/compare_trackers.py).
 """
+import collections
 import dataclasses
 import os
 
@@ -17,6 +18,7 @@ H_BINS, S_BINS = 30, 32
 MIN_SATURATION = 60  # grey and dark pixels have no reliable hue
 MIN_VALUE = 40
 MIN_COLOURFUL = 0.5  # share of the learn box that must be colourful for an object to count as coloured
+MIN_DISTINCT = 0.25  # and this share of its colours must be rare around it: a warm tint makes everything colourful
 WEAK_BINS = 0.3  # histogram bins below this share of the strongest one are dropped
 RARE_BINS = 0.01  # colours that make up less of the learn region than this are noise
 NOISE_FLOOR = 60  # back-projection values (0..255) below this are ignored
@@ -24,24 +26,29 @@ MIN_FILL = 0.25  # share of the box that must match the object, otherwise the tr
 SIZE_JUMP = 2.5  # the box area may change by at most this factor between two frames
 LOST_AFTER = 5  # consecutive bad frames before the object counts as lost
 
-VERIFY_BINS = [8, 4, 8]  # hue, saturation, value bins of the check histogram
-VERIFY_GOOD, VERIFY_BAD = 0.35, 0.75  # histogram distance: fully trusted below, no confidence above
-DRIFT_DIST = 0.6  # distance above which the box no longer shows the learned object
-DRIFT_FRAMES = 3  # frames in a row above DRIFT_DIST before the object counts as lost
+# Is the box still on the learned object? A coloured object is judged by its hue alone, weighted by
+# saturation: brightness, exposure and white balance change a lot with the light and with how the object
+# is held, hue much less. An object without colour is judged by the directions of its edges, which light
+# does not change either. In tests with darker, brighter and warmer copies of the clips, the old
+# colour-and-brightness histogram moved more on the right object than on a wrong one.
+HUE_BINS = 18
+SHAPE_BINS = 8
+VERIFY_GOOD, VERIFY_BAD = 0.20, 0.50  # hue distance: fully trusted below, no confidence above
+DRIFT_DIST = 0.45  # hue distance above which the box no longer shows the learned object
+DRIFT_FRAMES = 3  # frames in a row beyond the limit before the object counts as lost
 NANO_MIN_SCORE = 0.3
-REDETECT_DIST = 0.45  # a blob must be this close to the learned look to be the object again
-REDETECT_MARGIN = 0.1  # the best blob must beat the runner-up by this much, else it is ambiguous
+REDETECT_HUE = 0.40  # a blob must be this close in hue to be the object again
+REDETECT_SHAPE = 0.26  # and this close in the directions of its edges: a round disc is not a square box
+REDETECT_SIZE = 1.4  # and at most this factor taller or shorter than it was while it was tracked well
+REDETECT_MARGIN = 0.1  # among those, the best look must beat the runner-up by this much, else it is ambiguous
 REDETECT_FRAMES = 3  # frames in a row the same blob must be found before tracking resumes
-# An object without colour is checked by two cues, the colour/brightness histogram and the brightness
-# histogram alone. Its first second after Learn is not checked: the learn box is loose, so at the end of
-# that second the reference is taken again from the (tight) tracked box. The limits then follow how much
-# the object varies by itself during the next second, but never fall below the floor.
-V_BINS = 16
+# An object without colour: its first second after Learn is not checked, because the learn box is loose,
+# so at the end of that second the reference is taken again from the (tight) tracked box. The limit then
+# follows how much the object varies by itself during the next second, but stays between floor and ceiling.
 SETTLE_FRAMES = 20
 BASELINE_FRAMES = 20
-TRACK_ONLY_FLOOR = (0.45, 0.47)  # lowest limits for (colour/brightness, brightness) distances
-TRACK_ONLY_CEIL = (0.70, 0.70)
-TRACK_ONLY_MARGIN = (0.12, 0.10)  # added to the largest distance seen during the baseline
+SHAPE_FLOOR, SHAPE_CEIL, SHAPE_MARGIN = 0.25, 0.30, 0.08  # a wrong object scores 0.33 or more
+PROFILE_VERSION = 2  # of the saved form of an object
 MIN_BOX = 8
 RETICLE = 0.3  # side of the learn box as a share of the image height
 NANO_MODELS = ("nanotrack_backbone_sim.onnx", "nanotrack_head_sim.onnx")
@@ -100,6 +107,8 @@ class ColorTracker:
         # common around the object (the background) scores low and cannot tell it apart.
         ratio = wanted / (wanted + around + 1e-4)
         ratio[wanted < wanted.sum() * RARE_BINS] = 0
+        if (ratio * wanted).sum() / wanted.sum() < MIN_DISTINCT:
+            raise ValueError("its colours are common around it")
         ratio[ratio < ratio.max() * WEAK_BINS] = 0
         self._hist = cv2.normalize(ratio, None, 0, 255, cv2.NORM_MINMAX).astype(np.float32)
         self._ref_height = float(h)
@@ -217,29 +226,44 @@ class ColorTracker:
         self._box, self._bad, self.state = box, 0, "tracking"
 
 
-def _verify_hist(frame, box):
-    """Coarse HSV histogram of the pixels inside box, for telling whether the box still shows the object."""
+def _patch(frame, box):
     height, width = frame.shape[:2]
     x, y, w, h = box
     x, y = max(x, 0), max(y, 0)
     patch = frame[y:min(y + h, height), x:min(x + w, width)]
-    if patch.size == 0:
+    return patch if patch.size else None
+
+
+def _look_hist(frame, box):
+    """Coarse hue/saturation/brightness histogram of the box: how alike two candidates look, not for lighting."""
+    patch = _patch(frame, box)
+    if patch is None:
         return None
-    hist = cv2.calcHist([cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)], [0, 1, 2], None, VERIFY_BINS,
-                        [0, 180, 0, 256, 0, 256])
+    hist = cv2.calcHist([cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)], [0, 1, 2], None, [8, 4, 8], [0, 180, 0, 256, 0, 256])
     return cv2.normalize(hist, None, 1, 0, cv2.NORM_L1).flatten().astype(np.float32)
 
 
-def _brightness_hist(frame, box):
-    """Histogram of the brightness of the pixels inside box."""
-    height, width = frame.shape[:2]
-    x, y, w, h = box
-    x, y = max(x, 0), max(y, 0)
-    patch = frame[y:min(y + h, height), x:min(x + w, width)]
-    if patch.size == 0:
+def _hue_hist(frame, box):
+    """Hue of the pixels in the box, each weighted by its saturation."""
+    patch = _patch(frame, box)
+    if patch is None:
         return None
-    hist = cv2.calcHist([cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)], [0], None, [V_BINS], [0, 256])
-    return cv2.normalize(hist, None, 1, 0, cv2.NORM_L1).flatten().astype(np.float32)
+    hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+    weight = hsv[..., 1].astype(np.float32) / 255 * (hsv[..., 2] > MIN_VALUE)
+    hist = np.bincount((hsv[..., 0] // (180 // HUE_BINS)).ravel(), weights=weight.ravel(), minlength=HUE_BINS)
+    return (hist / (hist.sum() + 1e-6)).astype(np.float32)
+
+
+def _shape_hist(frame, box):
+    """Directions of the edges in the box, weighted by their strength."""
+    patch = _patch(frame, box)
+    if patch is None:
+        return None
+    gray = cv2.resize(cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY), (24, 24), interpolation=cv2.INTER_AREA).astype(np.float32)
+    gx, gy = cv2.Sobel(gray, cv2.CV_32F, 1, 0), cv2.Sobel(gray, cv2.CV_32F, 0, 1)
+    direction = (np.arctan2(gy, gx) % np.pi / np.pi * SHAPE_BINS).astype(int).clip(0, SHAPE_BINS - 1)
+    hist = np.bincount(direction.ravel(), weights=cv2.magnitude(gx, gy).ravel(), minlength=SHAPE_BINS)
+    return (hist / (hist.sum() + 1e-6)).astype(np.float32)
 
 
 def _distance(a, b):
@@ -253,12 +277,12 @@ def _overlap(a, b):
 
 
 class ObjectTracker:
-    """Tracks any learned object. Objects with colour are also checked and found again after a loss.
+    """Tracks any learned object and notices when the box has left it.
 
-    tier is "colour" for such objects. An object without colour (a plain grey one) gets tier
-    "track-only": it is followed while it stays in view, but a drift onto something else cannot be
-    noticed and it cannot be found again, so it has to be learned again after a loss. Without the
-    NanoTrack models (models_dir) only objects with colour work.
+    tier is "colour" for an object with colour: it is judged by hue, and found again by its colours
+    after a loss. An object without colour (a plain grey one) gets tier "track-only": it is judged by
+    the shape of its edges, which is less reliable, and it cannot be found again, so it has to be
+    learned again after a loss. Without the NanoTrack models (models_dir) only objects with colour work.
     """
 
     def __init__(self, models_dir=None):
@@ -273,12 +297,14 @@ class ObjectTracker:
         self.tier = None
         self.reason = ""
         self._box = None
-        self._verify = None
-        self._verify_v = None
-        self._baseline = []  # (colour/brightness, brightness) distances during the second after the settling
-        self._limits = TRACK_ONLY_FLOOR
+        self._reference = None  # hue histogram (colour) or edge-direction histogram (track-only) of the object
+        self._shape = None  # edge-direction histogram at Learn, to tell look-alikes of the same colour apart
+        self._look = None  # colour/brightness histogram, only to choose between candidates
+        self._baseline = []  # distances during the second after the settling (track-only)
+        self._limit = SHAPE_FLOOR
         self._frames = 0  # tracked frames since Learn
         self._ref_height = None
+        self._heights = collections.deque(maxlen=45)  # box heights of the last frames that matched well
         self._height_rel = None  # reference height as a share of the frame height, for saved objects
         self._bad = self._drift = self._seen = 0
         self._candidate = None
@@ -328,9 +354,11 @@ class ObjectTracker:
             self.colour._ref_height = float(box[3])
         self._ref_height = float(box[3])
         self._height_rel = self._ref_height / height
-        self._verify = _verify_hist(frame, box)
-        self._verify_v = _brightness_hist(frame, box)
-        self._baseline, self._limits, self._frames = [], TRACK_ONLY_FLOOR, 0
+        self._reference = _hue_hist(frame, box) if coloured else _shape_hist(frame, box)
+        self._look = _look_hist(frame, box)
+        self._shape = _shape_hist(frame, box)
+        self._baseline, self._limit, self._frames = [], SHAPE_FLOOR, 0
+        self._heights.clear()
         self._start(frame, box)
         return Track("tracking", box, 1.0, 1.0)
 
@@ -338,14 +366,16 @@ class ObjectTracker:
         """The saved form of a learned object with colour (see load)."""
         if self.tier != "colour":
             raise ValueError("only objects with colour can be saved")
-        return {"hist": self.colour._hist, "ref_fill": self.colour._ref_fill, "verify": self._verify,
-                "height_rel": self._height_rel}
+        return {"version": PROFILE_VERSION, "hist": self.colour._hist, "ref_fill": self.colour._ref_fill,
+                "hue": self._reference, "look": self._look, "shape": self._shape, "height_rel": self._height_rel}
 
     def load(self, profile):
         """Use a saved object; the tracker starts out lost and finds the object by its colours."""
+        if int(profile.get("version", 0)) != PROFILE_VERSION:
+            raise ValueError("this object was saved by an older version: learn it again")
         self.reset()
         self.tier = "colour"
-        self._verify = profile["verify"]
+        self._reference, self._look, self._shape = profile["hue"], profile["look"], profile["shape"]
         self._height_rel = float(profile["height_rel"])
         self.colour.restore(profile["hist"], float(profile["ref_fill"]), 1.0)
         self._lose("searching")
@@ -380,48 +410,56 @@ class ObjectTracker:
             return Track("tracking", self._box, 0.0, self._box[3] / self._ref_height)
         self._bad = 0
         self._box = box
-        distance = _distance(self._verify, _verify_hist(frame, box))
         if self.tier == "colour":
+            distance = _distance(self._reference, _hue_hist(frame, box))
             drifting = distance > DRIFT_DIST
             match = min(1.0, max(0.0, (VERIFY_BAD - distance) / (VERIFY_BAD - VERIFY_GOOD)))
         else:
-            drifting, match = self._check_plain(frame, box, distance)
+            drifting, match = self._check_plain(frame, box)
         self._drift = self._drift + 1 if drifting else 0
         if self._drift >= DRIFT_FRAMES:
             return self._lose("drift")
+        if match > 0.8:
+            self._heights.append(box[3])
         return Track("tracking", box, min(score, 1.0) * match, box[3] / self._ref_height)
 
-    def _check_plain(self, frame, box, colour_distance):
+    def _check_plain(self, frame, box):
         """The drift check for an object without colour. Returns (drifting, how well it still matches 0..1)."""
         self._frames += 1
         if self._frames < SETTLE_FRAMES:
             return False, 1.0
         if self._frames == SETTLE_FRAMES:
-            self._verify, self._verify_v = _verify_hist(frame, box), _brightness_hist(frame, box)
+            self._reference = _shape_hist(frame, box)
             return False, 1.0
-        brightness_distance = _distance(self._verify_v, _brightness_hist(frame, box))
+        distance = _distance(self._reference, _shape_hist(frame, box))
         if len(self._baseline) < BASELINE_FRAMES:
-            self._baseline.append((colour_distance, brightness_distance))
+            self._baseline.append(distance)
             if len(self._baseline) == BASELINE_FRAMES:
-                self._limits = tuple(
-                    min(ceil, max(floor, max(b[i] for b in self._baseline) + margin))
-                    for i, (floor, ceil, margin) in enumerate(zip(TRACK_ONLY_FLOOR, TRACK_ONLY_CEIL, TRACK_ONLY_MARGIN)))
-        excess = max(colour_distance / self._limits[0], brightness_distance / self._limits[1])
+                self._limit = min(SHAPE_CEIL, max(SHAPE_FLOOR, max(self._baseline) + SHAPE_MARGIN))
+        excess = distance / self._limit
         return excess > 1.0, min(1.0, max(0.0, (1.25 - excess) / 0.25))
 
     def _search(self, frame):
         """Lost: for an object with colour, look for it in the whole frame."""
         if self.tier != "colour":
             return Track("lost", reason="track-only")
-        scored = sorted((_distance(self._verify, _verify_hist(frame, b)), b)
-                        for b in self.colour.blobs(self.colour.probability(frame)))
-        near = [s for s in scored if s[0] < REDETECT_DIST]
-        if not near:
+        # Candidates must match in hue, in the shape of their edges and in size. Among them the one that
+        # looks most like the object wins: that comparison is relative, so a change of light, which moves
+        # all of them alike, does not matter.
+        scored = []
+        expected = float(np.median(self._heights)) if len(self._heights) >= 5 else self._ref_height
+        for blob in self.colour.blobs(self.colour.probability(frame)):
+            if (1 / REDETECT_SIZE <= blob[3] / expected <= REDETECT_SIZE
+                    and _distance(self._reference, _hue_hist(frame, blob)) < REDETECT_HUE
+                    and _distance(self._shape, _shape_hist(frame, blob)) < REDETECT_SHAPE):
+                scored.append((_distance(self._look, _look_hist(frame, blob)), blob))
+        scored.sort()
+        if not scored:
             self.reason, self._candidate, self._seen = "searching", None, 0
-        elif len(near) > 1 and near[1][0] - near[0][0] < REDETECT_MARGIN:
+        elif len(scored) > 1 and scored[1][0] - scored[0][0] < REDETECT_MARGIN:
             self.reason, self._candidate, self._seen = "ambiguous", None, 0
         else:
-            box = near[0][1]
+            box = scored[0][1]
             same = self._candidate is not None and _overlap(box, self._candidate) > 0.3
             self._seen = self._seen + 1 if same else 1
             self._candidate = box

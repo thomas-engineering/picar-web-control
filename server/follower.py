@@ -269,7 +269,7 @@ class Follower:
         def job(frame):
             with np.load(path, allow_pickle=False) as data:
                 profile = {k: data[k] for k in data.files}
-            profile["ref_fill"], profile["height_rel"] = float(profile["ref_fill"]), float(profile["height_rel"])
+            profile["version"] = int(profile.get("version", 0))
             self._reset()
             self.tracker.load(profile)
             try:

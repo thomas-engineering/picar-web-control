@@ -12,6 +12,7 @@ import os
 import sys
 
 import cv2
+import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -28,6 +29,25 @@ RESULTS = []
 def check(name, ok, detail=""):
     RESULTS.append(ok)
     print("%-4s %-44s %s" % ("PASS" if ok else "FAIL", name, detail))
+
+
+def perturb(image, kind):
+    """The frame as it would look in other light: darker, brighter, warmer, cooler, other gamma, more or less saturated."""
+    f = image.astype(np.float32)
+    if kind.startswith("gain"):
+        f *= float(kind[4:])
+    elif kind == "warm":
+        f[..., 0] *= 0.82
+        f[..., 2] *= 1.18
+    elif kind == "cool":
+        f[..., 0] *= 1.18
+        f[..., 2] *= 0.82
+    elif kind.startswith("gamma"):
+        f = 255 * (f / 255) ** float(kind[5:])
+    elif kind in ("desat", "sat"):
+        grey = f.mean(2, keepdims=True)
+        f = grey + (f - grey) * (0.65 if kind == "desat" else 1.35)
+    return np.clip(f, 0, 255).astype(np.uint8)
 
 
 def load(clip):
@@ -67,7 +87,7 @@ def main():
           all(t.state != "tracking" or t.box[0] > 40 for t in tracks[back:]), "")
     for i in (317, 362, 408, 453, 499):
         check("red disc: on the disc at frame %d" % i, near(tracks[i], DISC_AT[i]), "box %s" % (tracks[i].box,))
-    after = [t.confidence for t in tracks[back + 5:] if t.state == "tracking"]
+    after = [t.confidence for t in tracks[back + 20:] if t.state == "tracking"]  # the disc is still half under the hand before
     check("red disc: confident while following", sum(c > 0.5 for c in after) >= 0.98 * len(after),
           "%.1f %% of frames above 0.5" % (100 * sum(c > 0.5 for c in after) / len(after)))
 
@@ -99,6 +119,25 @@ def main():
         check("grey cube: cannot be saved", False)
     except ValueError:
         check("grey cube: cannot be saved", True)
+
+    # The same clips in other light: no false alarm, and the hand is still noticed.
+    for kind in ("gain0.6", "gain1.6", "warm", "cool", "gamma0.7", "gamma1.5", "sat"):
+        tracker = ObjectTracker(models)
+        tracker.learn(perturb(ball[0], kind), DISC_START)
+        tracks = [tracker.update(perturb(f, kind)) for f in ball]
+        lost = next((i for i, t in enumerate(tracks) if t.state == "lost"), None)
+        back = next((i for i, t in enumerate(tracks) if lost is not None and i > lost and t.state == "tracking"), None)
+        check("%s: red disc is judged by hue, not brightness" % kind,
+              tracker.tier == "colour" and lost is not None and 232 <= lost <= 265 and back is not None and back <= 300
+              and near(tracks[362], DISC_AT[362]),
+              "lost at %s, found again at %s" % (lost, back))
+        tracker = ObjectTracker(models)
+        tracker.learn(perturb(cube[0], kind), CUBE_START)
+        tracks = [tracker.update(perturb(f, kind)) for f in cube]
+        lost = next((i for i, t in enumerate(tracks) if t.state == "lost"), None)
+        check("%s: grey cube is not mistaken for a coloured one" % kind,
+              tracker.tier == "track-only" and lost is not None and 64 <= lost <= 80,
+              "%s, lost at %s" % (tracker.tier, lost))
 
     print("PASS" if all(RESULTS) else "FAIL")
     return 0 if all(RESULTS) else 1
