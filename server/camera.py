@@ -29,6 +29,8 @@ class Camera:
         self._seq = 0
         self.streams = []  # one {"budget"} per connected viewer, for /api/status
         self._generation = 0  # bumped when the resolution changes, so the capture thread reopens
+        self.on_frame = None  # called with (image, capture time) for every frame; must copy what it keeps
+        self.overlay = None  # called with the image just before it is encoded, to draw on it
 
     def set_resolution(self, width, height):
         with self._cond:
@@ -73,6 +75,12 @@ class Camera:
                 cap = None
                 time.sleep(0.5)
                 continue
+            for hook, args in ((self.on_frame, (img, time.monotonic())), (self.overlay, (img,))):
+                if hook:
+                    try:
+                        hook(*args)
+                    except Exception:
+                        log.exception("camera hook failed")
             ok, jpg = cv2.imencode(".jpg", img, params)
             if not ok:
                 continue

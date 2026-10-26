@@ -9,6 +9,7 @@ to the car's hardware directly, so the SunFounder software is not needed.
 - Responsive page for phone (portrait and landscape), tablet and PC; keyboard control on PC
 - Speed limit, camera resolution switch, invertible axes, connection indicator with round-trip time
 - Calibration page: servo trims and limits, motor minimum and maximum speed, motor direction
+- Follow mode: show the car an object, and it drives after it (see [Follow mode](#follow-mode))
 - Safety: the car stops when commands stop arriving (0.3 s watchdog) and when the page loses focus
 
 There is no authentication. Anyone on the network can drive the car, so only run it on a network
@@ -78,6 +79,35 @@ the first one then shows a button to take them back.
 | C | Centre the camera |
 | Space | Stop |
 
+### Follow mode
+
+Hold an object inside the white corners in the video and tap **Learn**, then tap **Follow**. The
+camera keeps the object centred, the car steers toward it and drives to the distance at which it was
+learned. The speed is capped at 30 % motor duty (`SPEED_CAP_DUTY` in `server/follower.py`).
+
+Follow mode ends, and the car stops, when:
+
+- you touch a stick, press STOP or space, or tap **Stop following**
+- the page loses focus, closes, is replaced by another device, or its messages stop for 0.3 s
+- the tracker stops delivering results for 0.3 s (the same watchdog as for manual driving)
+- the camera stops, or the object is not clearly in view (the car stops at once, the camera sweeps
+  for it for about 8 s, then follow mode gives up)
+
+Two kinds of objects:
+
+- **With colour** (at least half of the learn box is colourful): checked against the learned
+  colours, so the car notices when the tracker has drifted onto something else, and finds the
+  object again after it was hidden. A coloured object can be saved by name in Settings and loaded
+  later; the car then looks for it.
+- **Without colour** (a plain grey object): followed only while it stays in view. The tracker cannot
+  notice that it switched to something else, for example a hand in front of it, and cannot find the
+  object again, so learn it again after a loss. The page says so.
+
+Setup on the Pi: `deploy/fetch_models.sh` downloads the NanoTrack model files into `models/`
+(not part of the repository). Without them only objects with colour work. Saved objects go to
+`data/objects/` (override with `PICAR_OBJECTS`), `PICAR_MODELS` changes the model directory and
+`PICAR_TRACKER_THREADS` the number of OpenCV threads (default 3).
+
 ### Calibration
 
 Open `/calibrate.html` (link in Settings). Changes apply at once and are saved in
@@ -108,6 +138,8 @@ browser ──WebSocket /ws──► server/app.py ─► server/control.py ─�
 - `server/hardware.py`: PCA9685 and motor driver layer, plus the calibration file
 - `server/control.py`: turns commands into hardware calls and stops the car if commands stop
 - `server/camera.py`: webcam to MJPEG; the camera only runs while someone watches
+- `server/follow.py`, `follow_control.py`, `follower.py`: the object tracker, the control law that
+  turns it into steering, throttle and camera moves, and the glue to the camera and the controller
 - `server/app.py`: HTTP, WebSocket and the static `web/` page
 - `web/`: `index.html` (driving), `calibrate.html`, `app.js`, `link.js` (WebSocket link), `style.css`
 
@@ -121,10 +153,11 @@ The client sends JSON about every 30 ms. Absent fields keep their value.
 | `pan_rate`, `tilt_rate` | -1 to 1, camera moves continuously |
 | `pan`, `tilt` | Absolute camera angle in degrees (90 is the centre) |
 | `center_camera` | `true` centres the camera |
+| `follow` | `true` starts follow mode, `false` stops it. While it runs, the drive and camera fields above are ignored unless non-zero, which ends it |
 | `ping` | Any number; the server answers `{"type": "pong", "t": <same>}` |
 
 The server sends `{"type": "state", ...}` with the camera position and limits on connect and
-whenever the camera moves. A newer connection replaces the older one, which is closed with code
+whenever the camera moves, and `{"type": "follow", ...}` with the follow state whenever it changes. A newer connection replaces the older one, which is closed with code
 4000. If no command arrives for 0.3 s the throttle and camera movement are stopped.
 
 ### HTTP
@@ -135,6 +168,8 @@ whenever the camera moves. A newer connection replaces the older one, which is c
 | `GET /api/status` | Controller state, command gaps, per-viewer video budget |
 | `GET`, `POST /api/camera` | `{"max": true}` switches to the maximum resolution (not saved across restarts) |
 | `GET`, `POST /api/calibration` | Read and change calibration values; changes are saved |
+| `GET /api/follow`, `POST /api/follow/learn`, `DELETE /api/follow` | Follow state; learn what is in the reticle; forget it |
+| `GET`, `POST /api/objects`, `POST /api/objects/NAME/load`, `DELETE /api/objects/NAME`, `GET /api/objects/NAME/thumbnail` | Saved objects |
 
 ## Wi-Fi
 
@@ -160,6 +195,10 @@ NetworkManager and one onboard plus one USB Wi-Fi interface.
 | `lag_test.py` | Measure control latency, ping loss and the Pi's load while video streams over Wi-Fi |
 | `slow_viewer.py` | Check that the video byte budget shrinks for a slow viewer |
 | `pi_probe.sh` | Sampler that `lag_test.py --ssh` runs on the Pi |
+| `follow_e2e.py` | Follow mode against the mock server: every way it must end, the speed cap, saved objects |
+| `follow_sim.py` | Check and tune the control law against a simulated car |
+| `track_test.py`, `object_test.py` | Check the trackers on a synthetic scene and on recorded clips |
+| `record_clip.py`, `compare_trackers.py` | Record a clip with the car's camera (on the Pi) and compare trackers on it |
 
 Each script's docstring shows how to run it.
 

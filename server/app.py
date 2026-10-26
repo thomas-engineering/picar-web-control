@@ -11,18 +11,20 @@ import logging
 import os
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .camera import Camera
 from .control import Controller
+from .follower import Busy, Follower
 from .hardware import Hardware
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("picar")
 
-WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WEB_DIR = os.path.join(ROOT_DIR, "web")
 
 
 def _size(text):
@@ -45,12 +47,23 @@ async def lifespan(app):
         quality=int(os.environ.get("PICAR_QUALITY", "55")),
     )
     app.state.active_ws = None
+    follower = Follower(
+        app.state.controller,
+        asyncio.get_running_loop(),
+        models_dir=os.environ.get("PICAR_MODELS", os.path.join(ROOT_DIR, "models")),
+        objects_dir=os.environ.get("PICAR_OBJECTS", os.path.join(ROOT_DIR, "data", "objects")),
+    )
+    app.state.follower = follower
+    app.state.camera.on_frame = follower.offer
+    app.state.camera.overlay = follower.overlay
     task = asyncio.create_task(app.state.controller.run())
     log.info("ready")
     try:
         yield
     finally:
         task.cancel()
+        app.state.controller.halt("shutdown")
+        follower.close()
         hw.close()  # stops the motors
 
 
@@ -59,6 +72,10 @@ app = FastAPI(lifespan=lifespan)
 
 class CameraUpdate(BaseModel):
     max: bool
+
+
+class ObjectName(BaseModel):
+    name: str = Field(min_length=1, max_length=32)
 
 
 class CalibrationUpdate(BaseModel):
@@ -84,6 +101,7 @@ def status():
     return {
         **app.state.controller.status(),
         "viewers": cam.viewers,
+        "follow": app.state.follower.status(),
         "video": [
             {"budget_kib_s": round(st["budget"] / 1024)}
             for st in cam.streams
@@ -115,6 +133,70 @@ def set_camera(update: CameraUpdate):
         *(app.state.max_resolution if update.max else app.state.default_resolution)
     )
     return camera_info()
+
+
+async def follow_request(call, *args):
+    """Run a follower action and turn its failures into HTTP errors."""
+    try:
+        await call(*args)
+    except Busy as error:
+        raise HTTPException(409, str(error))
+    except FileNotFoundError:
+        raise HTTPException(404, "no such object")
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    return app.state.follower.status()
+
+
+@app.get("/api/follow")
+def get_follow():
+    return app.state.follower.status()
+
+
+@app.post("/api/follow/learn")
+async def learn_object():
+    """Learn what is inside the reticle in the middle of the picture."""
+    return await follow_request(app.state.follower.learn)
+
+
+@app.delete("/api/follow")
+async def forget_object():
+    return await follow_request(app.state.follower.forget)
+
+
+@app.get("/api/objects")
+def list_objects():
+    return app.state.follower.list_objects()
+
+
+@app.post("/api/objects")
+async def save_object(body: ObjectName):
+    await follow_request(app.state.follower.save, body.name)
+    return app.state.follower.list_objects()
+
+
+@app.post("/api/objects/{name}/load")
+async def load_object(name: str):
+    return await follow_request(app.state.follower.load, name)
+
+
+@app.delete("/api/objects/{name}")
+def delete_object(name: str):
+    try:
+        app.state.follower.delete(name)
+    except FileNotFoundError:
+        raise HTTPException(404, "no such object")
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    return app.state.follower.list_objects()
+
+
+@app.get("/api/objects/{name}/thumbnail")
+def object_thumbnail(name: str):
+    try:
+        return Response(app.state.follower.thumbnail_of(name), media_type="image/jpeg")
+    except (OSError, ValueError):
+        raise HTTPException(404, "no such object")
 
 
 @app.get("/api/calibration")
@@ -149,6 +231,7 @@ async def video():
 async def control(ws: WebSocket):
     await ws.accept()
     ctl = app.state.controller
+    follower = app.state.follower
     # A new connection (for example the phone reconnecting) takes over from the old one.
     previous = app.state.active_ws
     app.state.active_ws = ws
@@ -164,7 +247,7 @@ async def control(ws: WebSocket):
 
     async def push_state():
         """Report the camera position when it moves, so the UI follows rate-driven movement."""
-        last = None
+        last = last_follow = None
         with contextlib.suppress(Exception):
             while True:
                 await asyncio.sleep(0.2)
@@ -172,6 +255,11 @@ async def control(ws: WebSocket):
                 if position != last:
                     last = position
                     await send({"type": "state", **ctl.status()})
+                status = follower.status()
+                key = {**status, "confidence": round(status["confidence"], 1)}
+                if key != last_follow:
+                    last_follow = key
+                    await send({"type": "follow", **status})
 
     pusher = asyncio.create_task(push_state())
     try:
@@ -184,6 +272,13 @@ async def control(ws: WebSocket):
             except ValueError:
                 continue
             ctl.command(msg)
+            if isinstance(msg, dict) and "follow" in msg:
+                if msg["follow"] is True:
+                    problem = follower.start()
+                    if problem:
+                        await send({"type": "follow", **follower.status(), "message": problem})
+                elif msg["follow"] is False:
+                    ctl.stop_following("stopped")
             # The client times this round trip to show its connection latency.
             if isinstance(msg, dict) and "ping" in msg:
                 await send({"type": "pong", "t": msg["ping"]})

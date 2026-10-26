@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Run the real server on a development machine, with fake hardware and a synthetic camera.
 
-    python -m venv .venv-dev && .venv-dev/bin/pip install fastapi "uvicorn[standard]" opencv-python-headless numpy websockets
-    .venv-dev/bin/python tools/mock_server.py [port]      # then open http://localhost:8765
+    python -m venv .venv && .venv/bin/pip install fastapi "uvicorn[standard]" opencv-contrib-python-headless==4.10.0.84 "numpy<2.3" websockets
+    deploy/fetch_models.sh                                # for follow mode
+    .venv/bin/python tools/mock_server.py [port]          # then open http://localhost:8765
 
 Servo and motor calls are discarded and the "camera" draws the moving balls of tools/synthetic_scene.py. The calibration is
-kept in a temporary file, so the Pi's data/ folder is never touched.
+kept in a temporary file, and so are the saved objects, so the Pi's data/ folder is never touched.
 """
 import os
 import sys
@@ -64,7 +65,10 @@ class FakeCapture:
     def read(self):
         time.sleep(1 / 15)
         width, height = self.size
-        image, _ = render(self.frame, self.size)
+        # The ball waits in the middle for 30 frames, so that Learn can capture it, and from frame 45 on
+        # it shrinks to half its size over 4 seconds, as if it walked away.
+        shrink = max(0.5, 1 - (self.frame - 45) / 120)
+        image, _ = render(max(self.frame - 30, 0), self.size, shrink)
         cv2.putText(image, "MOCK %dx%d" % self.size, (10, height - 12), cv2.FONT_HERSHEY_SIMPLEX, height / 300, (255, 255, 255), 2)
         self.frame += 1
         return True, image
@@ -74,6 +78,7 @@ import server.camera  # noqa: E402
 import server.hardware  # noqa: E402
 
 server.camera.cv2.VideoCapture = FakeCapture
+os.environ.setdefault("PICAR_OBJECTS", os.path.join(tempfile.gettempdir(), "picar_mock_objects"))
 calibration = os.path.join(tempfile.gettempdir(), "picar_mock_calibration.json")
 # CALIBRATION_PATH is bound as a default argument, so the defaults are patched.
 server.hardware.Calibration.load.__func__.__defaults__ = (calibration,)

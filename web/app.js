@@ -1,4 +1,4 @@
-// Driving page: two multi-touch joysticks, keyboard control, speed limit and connection status.
+// Driving page: two multi-touch joysticks, keyboard control, speed limit, follow mode and connection status.
 const $ = id => document.getElementById(id);
 
 const store = {
@@ -77,7 +77,7 @@ function keyAxis(map) {
 const settings = $("settings");
 window.addEventListener("keydown", e => {
   if (settings.open || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.code === "Space") { keys.clear(); e.preventDefault(); return; }
+  if (e.code === "Space") { keys.clear(); link.setDirty({ follow: false }); e.preventDefault(); return; }
   if (e.code === "KeyC" && !e.repeat) { link.setDirty({ center_camera: true }); return; }
   if (Object.values(KEYMAP).some(m => Object.values(m).some(list => list.includes(e.code)))) {
     keys.add(e.code);
@@ -126,7 +126,7 @@ maxRes.addEventListener("change", async () => {
 });
 loadCamera();
 
-$("open-settings").onclick = () => { keys.clear(); loadCamera(); settings.showModal(); };
+$("open-settings").onclick = () => { keys.clear(); loadCamera(); loadObjects(); settings.showModal(); };
 $("close-settings").onclick = () => settings.close();
 settings.addEventListener("click", e => { if (e.target === settings) settings.close(); });  // backdrop
 
@@ -142,10 +142,10 @@ for (const name of ["pan", "tilt"]) {
 }
 $("center").onclick = () => link.setDirty({ center_camera: true });
 
-$("stop").onclick = () => { drive.release(); cam.release(); keys.clear(); };
+$("stop").onclick = () => releaseAll();
 
 // A page that is not in front must not keep driving.
-const releaseAll = () => { drive.release(); cam.release(); keys.clear(); };
+const releaseAll = () => { drive.release(); cam.release(); keys.clear(); link.setDirty({ follow: false }); };
 document.addEventListener("visibilitychange", () => { if (document.hidden) releaseAll(); });
 window.addEventListener("blur", releaseAll);
 
@@ -213,6 +213,7 @@ function refreshIndicator() {
 const link = new Link({
   build,
   onStatus: setStatus,
+  onFollow: m => { followState = m; if (m.message) flash(m.message); renderFollow(); },
   onState: m => {
     const now = performance.now();
     for (const name of ["pan", "tilt"]) {
@@ -224,4 +225,84 @@ const link = new Link({
   },
 });
 $("retake").onclick = () => link.connect();
+
+// ---------- follow mode ----------
+
+// The car looks for what is inside the white corners (Learn), then drives after it (Follow). The server
+// ends follow mode itself when the object is lost, a stick is touched or the connection is weak.
+const el = (tag, className) => Object.assign(document.createElement(tag), className ? { className } : {});
+const ENDED = {
+  "manual control": "You took over", "stopped": "Stopped", "no input": "Lost the signal", "target lost": "Lost the object",
+  "camera size changed": "Camera size changed", "tracker error": "Tracker error", "error": "Error",
+};
+const LOST = {
+  drift: "Lost it: it looks different now", searching: "Looking for it...", ambiguous: "Two similar objects, not sure which",
+  "track-only": "Lost it. Show it again and tap Learn", lost: "Lost it",
+};
+let followState = { learned: false, following: false };
+let followNote = "", followNoteTimer = 0;
+function flash(text) {
+  followNote = text;
+  clearTimeout(followNoteTimer);
+  followNoteTimer = setTimeout(() => { followNote = ""; renderFollow(); }, 4000);
+}
+function followText(f) {
+  if (followNote) return followNote;
+  if (!f.learned) return "Hold an object in the corners";
+  const pct = Math.round(f.confidence * 100) + "%";
+  let text = f.state === "tracking" ? (f.following ? "Following " : "Tracking ") + pct : LOST[f.reason] || "Lost it";
+  if (f.state === "tracking" && f.tier === "track-only") text += " (no colour: cannot be found again)";
+  if (!f.following && f.ended && ENDED[f.ended]) text = ENDED[f.ended] + " · " + text;
+  return text;
+}
+function renderFollow() {
+  const f = followState;
+  $("follow_status").textContent = followText(f);
+  $("learn").hidden = f.learned;
+  $("follow").hidden = !f.learned;
+  $("forget").hidden = !f.learned || f.following;
+  $("follow").textContent = f.following ? "Stop following" : "Follow";
+  $("follow").classList.toggle("on", !!f.following);
+  $("follow").disabled = !f.following && !(f.state === "tracking" && f.confidence >= 0.35);
+  $("obj_save").disabled = !(f.learned && f.tier === "colour");
+}
+async function followCall(method, path, body) {
+  try {
+    const r = await fetch(path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+    const data = await r.json();
+    if (!r.ok) { flash(typeof data.detail === "string" ? data.detail : "That name does not work"); return null; }
+    return data;
+  } catch { flash("No connection"); return null; }
+}
+$("learn").onclick = async () => { const f = await followCall("POST", "/api/follow/learn"); if (f) { followState = f; renderFollow(); } };
+$("forget").onclick = async () => { const f = await followCall("DELETE", "/api/follow"); if (f) { followState = f; renderFollow(); } };
+$("follow").onclick = () => link.setDirty({ follow: !followState.following });
+
+// Saved objects: the car looks for a loaded one and follows it once it is found.
+async function loadObjects() {
+  const names = await followCall("GET", "/api/objects");
+  if (!names) return;
+  const box = $("objects");
+  box.replaceChildren();
+  if (!names.length) { const none = el("small", "stats"); none.textContent = "none saved yet"; box.append(none); }
+  for (const name of names) {
+    const path = "/api/objects/" + encodeURIComponent(name);
+    const row = el("div", "object"), picture = el("img"), label = el("span"), use = el("button"), del = el("button");
+    picture.alt = "";
+    picture.src = path + "/thumbnail";
+    label.textContent = name;
+    use.textContent = "Use";
+    use.onclick = async () => { const f = await followCall("POST", path + "/load"); if (f) { followState = f; renderFollow(); settings.close(); } };
+    del.textContent = "Delete";
+    del.onclick = async () => { if (await followCall("DELETE", path)) loadObjects(); };
+    row.append(picture, label, use, del);
+    box.append(row);
+  }
+}
+$("obj_save").onclick = async () => {
+  const name = $("obj_name").value.trim();
+  if (name && await followCall("POST", "/api/objects", { name })) { $("obj_name").value = ""; loadObjects(); }
+};
+renderFollow();
+fetch("/api/follow").then(r => r.json()).then(f => { followState = f; renderFollow(); }).catch(() => {});
 setInterval(refreshIndicator, 500);

@@ -33,6 +33,7 @@ REDETECT_DIST = 0.45  # a blob must be this close to the learned look to be the 
 REDETECT_MARGIN = 0.1  # the best blob must beat the runner-up by this much, else it is ambiguous
 REDETECT_FRAMES = 3  # frames in a row the same blob must be found before tracking resumes
 MIN_BOX = 8
+RETICLE = 0.3  # side of the learn box as a share of the image height
 NANO_MODELS = ("nanotrack_backbone_sim.onnx", "nanotrack_head_sim.onnx")
 
 
@@ -383,10 +384,24 @@ class ObjectTracker:
         return Track("lost", reason=self.reason)
 
 
+def reticle_box(width, height):
+    """The box that Learn captures: in the middle, a fixed share of the image height."""
+    side = int(height * RETICLE)
+    return (width - side) // 2, (height - side) // 2, side, side
+
+
+def draw_reticle(frame):
+    """Draw corner marks where the object has to be held for Learn."""
+    x, y, w, h = reticle_box(frame.shape[1], frame.shape[0])
+    n = w // 4
+    for cx, cy, dx, dy in ((x, y, 1, 1), (x + w, y, -1, 1), (x, y + h, 1, -1), (x + w, y + h, -1, -1)):
+        cv2.line(frame, (cx, cy), (cx + dx * n, cy), (255, 255, 255), 2)
+        cv2.line(frame, (cx, cy), (cx, cy + dy * n), (255, 255, 255), 2)
+
+
 def draw(frame, track):
-    """Draw the tracking result onto frame."""
+    """Draw the tracked box onto frame: green while it is trusted, orange while the match is weak."""
     if track.box:
         x, y, w, h = track.box
-        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-    label = "%.0f%%" % (track.confidence * 100) if track.state == "tracking" else (track.reason or track.state)
-    cv2.putText(frame, label, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        weak = track.confidence < 0.35
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 165, 255) if weak else (0, 255, 0), 2)

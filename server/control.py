@@ -29,6 +29,12 @@ class Controller:
         self.pan_rate = 0.0
         self.tilt_rate = 0.0
         self.last_command = 0.0
+        # Follow mode drives the car itself: the page's own drive fields are ignored while it runs, and
+        # it only goes on while both its own steps and the page's messages keep arriving.
+        self.following = False
+        self.last_follow = 0.0
+        self.last_client = 0.0
+        self.on_follow_end = None  # called with a reason when follow mode ends
         # (arrival time, seconds since the previous message), to spot network stalls
         self._gaps = collections.deque(maxlen=1000)
 
@@ -53,16 +59,19 @@ class Controller:
         if not isinstance(msg, dict):
             return
         now = time.monotonic()
+        self.last_client = now
+        if self.following:
+            if not self._manual(msg):
+                return  # the idle messages of the page must not count as commands
+            self.halt("manual control")  # touching a stick or the camera takes over
         if self.last_command and now - self.last_command < 5:  # a longer gap is just idle
             self._gaps.append((now, now - self.last_command))
         steer = _num(msg.get("steer"), -1, 1)
-        if steer is not None and steer != self.steer:
-            self.steer = steer
-            self.hw.steer(steer)
+        if steer is not None:
+            self._set_steer(steer)
         throttle = _num(msg.get("throttle"), -1, 1)
-        if throttle is not None and throttle != self.throttle:
-            self.throttle = throttle
-            self.hw.drive(throttle)
+        if throttle is not None:
+            self._set_throttle(throttle)
         c = self.hw.cal
         pan = _num(msg.get("pan"), 0, 180)
         tilt = _num(msg.get("tilt"), 0, 180)
@@ -85,8 +94,48 @@ class Controller:
             self.hw.pan_tilt(self.pan, self.tilt)
         self.last_command = time.monotonic()
 
-    def halt(self):
+    @staticmethod
+    def _manual(msg):
+        """Whether a message asks for any movement, as opposed to the page's idle zeros."""
+        for field in ("steer", "throttle", "pan_rate", "tilt_rate"):
+            if _num(msg.get(field), -1, 1):
+                return True
+        return any(_num(msg.get(f), 0, 180) is not None for f in ("pan", "tilt")) or msg.get("center_camera") is True
+
+    def _set_steer(self, value):
+        if value != self.steer:
+            self.steer = value
+            self.hw.steer(value)
+
+    def _set_throttle(self, value):
+        if value != self.throttle:
+            self.throttle = value
+            self.hw.drive(value)
+
+    def start_following(self):
+        self.following = True
+        self.last_follow = time.monotonic()
+
+    def follow_step(self, steer, throttle, pan_rate, tilt_rate):
+        """One step of follow mode; it also keeps follow mode's own watchdog alive."""
+        if not self.following:
+            return
+        self._set_steer(steer)
+        self._set_throttle(throttle)
+        self.pan_rate, self.tilt_rate = pan_rate, tilt_rate
+        self.last_follow = time.monotonic()
+
+    def stop_following(self, reason):
+        if self.following:
+            self.halt(reason)
+
+    def halt(self, reason="halt"):
         """Stop driving and camera movement; steering and camera position are left as they are."""
+        if self.following:
+            self.following = False
+            log.info("follow mode ended: %s", reason)
+            if self.on_follow_end:
+                self.on_follow_end(reason)
         self.throttle = 0.0
         self.pan_rate = self.tilt_rate = 0.0
         self.hw.stop()
@@ -112,7 +161,11 @@ class Controller:
         while True:
             await asyncio.sleep(self.TICK)
             now = time.monotonic()
-            if now - self.last_command > self.TIMEOUT and (
+            if self.following:
+                if now - self.last_follow > self.TIMEOUT or now - self.last_client > self.TIMEOUT:
+                    log.warning("follow mode lost its input, stopping")
+                    self.halt("no input")
+            elif now - self.last_command > self.TIMEOUT and (
                 self.throttle or self.pan_rate or self.tilt_rate
             ):
                 log.warning("no command for %.2fs, stopping", self.TIMEOUT)
@@ -129,5 +182,6 @@ class Controller:
             "tilt": self.tilt,
             "limits": {"pan": [c.pan_min, c.pan_max], "tilt": [c.tilt_min, c.tilt_max]},
             "command_gaps": self._gap_stats(),
+            "following": self.following,
             "command_age": round(time.monotonic() - self.last_command, 2) if self.last_command else None,
         }

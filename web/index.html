@@ -19,6 +19,13 @@
       <span class="spacer"></span>
       <button class="iconbtn" id="open-settings" aria-label="Settings">Settings</button>
     </div>
+    <div id="followbar">
+      <span class="pill" id="follow_status">Hold an object in the corners</span>
+      <span class="spacer"></span>
+      <button id="learn">Learn</button>
+      <button id="follow" hidden>Follow</button>
+      <button id="forget" hidden>Forget</button>
+    </div>
     <div id="takeover" hidden>
       <div>Another device took over the controls.</div>
       <button class="primary" id="retake">Take control back</button>
@@ -65,8 +72,18 @@
     <label class="toggle"><span>Invert camera tilt</span><input type="checkbox" id="inv_tilt"></label>
     <label class="toggle"><span>Invert steering</span><input type="checkbox" id="inv_steer"></label>
 
+    <div class="field">
+      <div class="head"><span>Saved objects</span></div>
+      <div id="objects"></div>
+      <div class="saverow">
+        <input id="obj_name" maxlength="32" placeholder="Name for the current object" autocomplete="off">
+        <button id="obj_save" disabled>Save</button>
+      </div>
+      <p class="stats" id="obj_note">Only objects with colour can be saved and found again.</p>
+    </div>
+
     <p class="stats" id="stats">no data yet</p>
-    <p class="stats">Keyboard: W A S D or arrows to drive, I J K L for the camera, C centres it, space stops.</p>
+    <p class="stats">Keyboard: W A S D or arrows to drive, I J K L for the camera, C centres it, space stops. Touching a stick or pressing stop ends follow mode.</p>
     <a href="calibrate.html">Calibration page</a>
   </div>
 </dialog>

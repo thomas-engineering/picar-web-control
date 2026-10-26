@@ -26,6 +26,12 @@ vanilla-JS page in `web/` (no build step, no framework). See README.md for the f
 - Motors keep their last PWM value if the process is killed hard. Stop the service normally.
 - No authentication exists. Do not expose the server beyond the local network.
 - Keep the wheels off the ground for any motor test, and ask before running motors.
+- Follow mode must end, and the car must stop, whenever its tracker results or the page's messages
+  stop (see `Controller.run`), on any manual input, and when the page loses focus. Keep its speed
+  cap. `tools/follow_e2e.py` checks all of this; run it after any change to `control.py`,
+  `follower.py` or `app.py`.
+- Ask before the first motor test of follow mode, and do the camera-only test first (wheels off the
+  ground): the pan and tilt directions in `follow_control.py` are assumptions until then.
 
 ## Conventions
 - Match the existing style: short docstrings, comments only for the why, no new dependencies

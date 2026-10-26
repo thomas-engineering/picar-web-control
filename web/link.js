@@ -3,12 +3,13 @@
 // build() is called every 30 ms and returns the continuous part of the command (steer, throttle,
 // camera rates). The server stops the car if this stream stops, so it is sent even when idle.
 // Absolute camera moves go through setDirty() and are sent once, so a stale page never
-// overrides the camera.
+// overrides the camera. Follow mode starts and stops the same way ({follow: true or false}).
 class Link {
-  constructor({ build, onState, onStatus }) {
+  constructor({ build, onState, onStatus, onFollow }) {
     this.build = build;
     this.onState = onState || (() => {});
     this.onStatus = onStatus || (() => {});
+    this.onFollow = onFollow || (() => {});
     this.ws = null;
     this.dirty = {};
     this.rtts = [];   // [time, ms]
@@ -47,6 +48,8 @@ class Link {
         this.rtts.push([now, now - m.t]);
       } else if (m.type === "state") {
         this.onState(m);
+      } else if (m.type === "follow") {
+        this.onFollow(m);
       }
     };
   }
