@@ -11,3 +11,6 @@ imager/
 
 # test clips recorded on the Pi (they show the room)
 clips/
+
+# NanoTrack model files, fetched by deploy/fetch_models.sh
+models/

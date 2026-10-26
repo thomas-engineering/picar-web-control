@@ -24,9 +24,9 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from server.follow import ColorTracker  # noqa: E402
+from server.follow import ColorTracker, ObjectTracker  # noqa: E402
 
-COLOURS = {"color": (0, 255, 0), "kcf": (255, 0, 0), "csrt": (255, 0, 255), "mil": (0, 255, 255), "nano": (255, 255, 0)}
+COLOURS = {"combined": (0, 128, 255), "color": (0, 255, 0), "kcf": (255, 0, 0), "csrt": (255, 0, 255), "mil": (0, 255, 255), "nano": (255, 255, 0)}
 
 
 def make(name, models):
@@ -47,6 +47,20 @@ def make(name, models):
 def run(name, frames, box, models):
     """Return a list with one (box or None, score or None, seconds) entry per frame."""
     results = []
+    if name == "combined":
+        tracker = ObjectTracker(models)
+        try:
+            tracker.learn(frames[0], box)
+        except ValueError as error:
+            print("  combined: %s" % error)
+            return [(None, None, 0.0)] * len(frames)
+        print("  combined: tier %s" % tracker.tier)
+        for frame in frames:
+            start = time.perf_counter()
+            track = tracker.update(frame)
+            spent = time.perf_counter() - start
+            results.append((list(track.box) if track.state == "tracking" else None, round(track.confidence, 2), spent))
+        return results
     if name == "color":
         tracker = ColorTracker()
         try:

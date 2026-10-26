@@ -36,7 +36,7 @@ def main():
 
     width, height = SIZE
     tracker = ColorTracker()
-    side = height // 3
+    side = int(height * 0.28)  # the reticle: a box that fits the ball, which has height / 4 across
     image, _ = render(0, SIZE)
     tracker.learn(image, ((width - side) // 2, (height - side) // 2, side, side))
 
