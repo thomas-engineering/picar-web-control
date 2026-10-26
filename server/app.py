@@ -291,4 +291,13 @@ async def control(ws: WebSocket):
             ctl.halt()
 
 
-app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+class FreshFiles(StaticFiles):
+    """Static files that the browser must revalidate on every load, so a deploy shows up at once."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/", FreshFiles(directory=WEB_DIR, html=True), name="web")
