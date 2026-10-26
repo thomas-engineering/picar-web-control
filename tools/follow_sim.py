@@ -33,6 +33,8 @@ SPEED_PER_DUTY = 0.8  # m/s at 100 % duty
 MIN_DUTY, MAX_DUTY, DEADZONE = 20, 60, 0.05  # as in the calibration and hardware.py
 CAMERA_RATE = 90.0  # degrees per second at rate 1.0 (Controller.CAMERA_SPEED)
 PAN_LIMITS = (30.0, 150.0)
+SPEED_CAP_DUTY = 30  # percent, the speed cap of follow mode
+MAX_THROTTLE = FollowControl.throttle_for_duty(SPEED_CAP_DUTY, MIN_DUTY, MAX_DUTY, DEADZONE)
 
 
 def duty_speed(throttle):
@@ -45,7 +47,7 @@ def duty_speed(throttle):
 
 class Run:
     def __init__(self, path, hidden=lambda t: False, latency=0.15, speed_scale=1.0, noise=True, seed=1,
-                 max_throttle=0.4, confidence=0.9):
+                 max_throttle=MAX_THROTTLE, confidence=0.9):
         self.path, self.hidden, self.latency, self.speed_scale = path, hidden, latency, speed_scale
         self.noise = noise
         self.confidence = confidence
@@ -165,14 +167,14 @@ def main():
     settled = next((r["t"] for r in log if r["distance"] < 0.75), None)
     rest = [r["pan"] for r in log if r["t"] > 15]
     wobble = max(rest) - min(rest)  # a stable camera loop settles; an unstable one keeps swinging
-    check("stationary target, 25 deg aside", basics(log, 0.4) and 0.5 <= final["distance"] <= 0.8
+    check("stationary target, 25 deg aside", basics(log, MAX_THROTTLE) and 0.5 <= final["distance"] <= 0.8
           and min(r["distance"] for r in log) > min_gap and not final["moved"] and wobble < 3,
           "final distance %.2f m, reached 0.75 m at %s s, min %.2f m, pan wobble %.1f deg" % (
               final["distance"], "%.1f" % settled if settled else "never", min(r["distance"] for r in log), wobble))
 
     run = Run(stationary(0.0, 2.0), confidence=0.2)
     log = run.run(10)
-    check("weak match (confidence 0.2)", basics(log, 0.4) and all(r["throttle"] == 0 for r in log),
+    check("weak match (confidence 0.2)", basics(log, MAX_THROTTLE) and all(r["throttle"] == 0 for r in log),
           "no motion at all: %s" % all(r["throttle"] == 0 for r in log))
 
     run = Run(walk_away(0.15))
@@ -180,21 +182,21 @@ def main():
     far = max(r["distance"] for r in log[60:])
     near = min(r["distance"] for r in log)
     view = sum(r["in_view"] for r in log) / len(log)
-    check("target walks straight away", basics(log, 0.4) and near > min_gap and far < 1.1 and view > 0.99,
+    check("target walks straight away", basics(log, MAX_THROTTLE) and near > min_gap and far < 1.1 and view > 0.99,
           "distance %.2f..%.2f m, in view %.0f %%" % (near, far, view * 100))
 
     run = Run(weave())
     log = run.run(40)
     view = sum(r["in_view"] for r in log) / len(log)
     near, far = min(r["distance"] for r in log), max(r["distance"] for r in log[60:])
-    check("target weaves left and right", basics(log, 0.4) and near > min_gap and far < 1.2 and view > 0.95,
+    check("target weaves left and right", basics(log, MAX_THROTTLE) and near > min_gap and far < 1.2 and view > 0.95,
           "distance %.2f..%.2f m, in view %.0f %%" % (near, far, view * 100))
 
     run = Run(circle())
     log = run.run(40)
     view = sum(r["in_view"] for r in log) / len(log)
     near = min(r["distance"] for r in log)
-    check("target circles in front", basics(log, 0.4) and near > min_gap and view > 0.9,
+    check("target circles in front", basics(log, MAX_THROTTLE) and near > min_gap and view > 0.9,
           "min distance %.2f m, in view %.0f %%" % (near, view * 100))
 
     hide = lambda t: 8.0 <= t < 10.0
@@ -203,7 +205,7 @@ def main():
     delay = run.latency
     during = [r for r in log if 8.0 + delay + FRAME_DT <= r["t"] < 10.0 + delay]
     after = [r for r in log if r["t"] > 10.5 + delay + FollowControl.REACQUIRE_HOLD + 0.5]
-    check("target hidden for 2 s", basics(log, 0.4) and all(r["throttle"] == 0 for r in during)
+    check("target hidden for 2 s", basics(log, MAX_THROTTLE) and all(r["throttle"] == 0 for r in during)
           and any(r["throttle"] > 0 for r in after),
           "no motion while hidden: %s, drives again after: %s" % (
               all(r["throttle"] == 0 for r in during), any(r["throttle"] > 0 for r in after)))
@@ -213,14 +215,14 @@ def main():
     gave_up = next((r["t"] for r in log if r["mode"] == "gave_up"), None)
     searching = any(r["mode"] == "searching" for r in log)
     stopped = all(r["throttle"] == 0 for r in log if r["t"] > 5.0 + run.latency + FRAME_DT)
-    check("target lost for good", basics(log, 0.4) and searching and stopped and gave_up is not None
+    check("target lost for good", basics(log, MAX_THROTTLE) and searching and stopped and gave_up is not None
           and gave_up < 5.0 + run.latency + 9.5,
           "searched: %s, gave up at %s s, no motion after loss: %s" % (
               searching, "%.1f" % gave_up if gave_up else "never", stopped))
 
     run = Run(walk_away(0.15), latency=0.4)
     log = run.run(10)
-    check("stale frames (0.4 s old)", basics(log, 0.4) and all(r["throttle"] == 0 for r in log),
+    check("stale frames (0.4 s old)", basics(log, MAX_THROTTLE) and all(r["throttle"] == 0 for r in log),
           "no motion at all: %s" % all(r["throttle"] == 0 for r in log))
 
     for latency in (0.05, 0.1, 0.2):
@@ -228,14 +230,14 @@ def main():
         log = run.run(40)
         view = sum(r["in_view"] for r in log) / len(log)
         swing = max(abs(r["steer"]) for r in log[100:])
-        check("weave, latency %.2f s" % latency, basics(log, 0.4) and view > 0.9 and min(r["distance"] for r in log) > min_gap,
+        check("weave, latency %.2f s" % latency, basics(log, MAX_THROTTLE) and view > 0.9 and min(r["distance"] for r in log) > min_gap,
               "in view %.0f %%, max steer %.2f" % (view * 100, swing))
 
     for scale in (0.5, 1.5):
         run = Run(weave(), speed_scale=scale)
         log = run.run(40)
         view = sum(r["in_view"] for r in log) / len(log)
-        check("weave, car %.1fx as fast" % scale, basics(log, 0.4) and view > 0.9 and min(r["distance"] for r in log) > min_gap,
+        check("weave, car %.1fx as fast" % scale, basics(log, MAX_THROTTLE) and view > 0.9 and min(r["distance"] for r in log) > min_gap,
               "in view %.0f %%, min distance %.2f m" % (view * 100, min(r["distance"] for r in log)))
 
     if verbose:

@@ -51,10 +51,18 @@ class FollowControl:
     SEARCH_TIME = 8.0  # seconds of sweeping before giving up
     SEARCH_RATE = 0.25  # camera rate while sweeping
 
-    def __init__(self, pan_limits=(30.0, 150.0), max_throttle=0.4):
+    def __init__(self, pan_limits=(30.0, 150.0), max_throttle=0.3):
+        if max_throttle < self.MIN_MOVE:
+            raise ValueError("max_throttle %.2f is below the smallest driving throttle" % max_throttle)
         self.pan_limits = pan_limits
         self.max_throttle = max_throttle
         self.reset()
+
+    @staticmethod
+    def throttle_for_duty(duty, min_speed, max_speed, deadzone=0.05):
+        """Throttle (0..1) that Hardware.drive turns into this motor duty in percent."""
+        span = (duty - min_speed) / (max_speed - min_speed)
+        return deadzone + max(0.0, min(1.0, span)) * (1 - deadzone)
 
     def reset(self):
         self._last_time = None
