@@ -34,9 +34,16 @@ class Controller:
         self.following = False
         self.last_follow = 0.0
         self.last_client = 0.0
+        self._follow_gaps = collections.deque(maxlen=400)  # (time, gap in seconds) of follow steps and of page messages
+        self._client_gaps = collections.deque(maxlen=1000)
         self.on_follow_end = None  # called with a reason when follow mode ends
         # (arrival time, seconds since the previous message), to spot network stalls
         self._gaps = collections.deque(maxlen=1000)
+
+    def _worst_gap(self, gaps, window=10.0):
+        now = time.monotonic()
+        recent = [g for t, g in gaps if now - t <= window]
+        return round(max(recent) * 1000) if recent else None
 
     def _gap_stats(self, window=10.0):
         now = time.monotonic()
@@ -59,6 +66,8 @@ class Controller:
         if not isinstance(msg, dict):
             return
         now = time.monotonic()
+        if self.following and self.last_client:
+            self._client_gaps.append((now, now - self.last_client))
         self.last_client = now
         if self.following:
             if not self._manual(msg):
@@ -123,7 +132,9 @@ class Controller:
         self._set_steer(steer)
         self._set_throttle(throttle)
         self.pan_rate, self.tilt_rate = pan_rate, tilt_rate
-        self.last_follow = time.monotonic()
+        now = time.monotonic()
+        self._follow_gaps.append((now, now - self.last_follow))
+        self.last_follow = now
 
     def stop_following(self, reason):
         if self.following:
@@ -163,7 +174,8 @@ class Controller:
             now = time.monotonic()
             if self.following:
                 if now - self.last_follow > self.TIMEOUT or now - self.last_client > self.TIMEOUT:
-                    log.warning("follow mode lost its input, stopping")
+                    log.warning("follow mode lost its input (tracker silent %.2f s, page silent %.2f s), stopping",
+                                now - self.last_follow, now - self.last_client)
                     self.halt("no input")
             elif now - self.last_command > self.TIMEOUT and (
                 self.throttle or self.pan_rate or self.tilt_rate
@@ -183,5 +195,6 @@ class Controller:
             "limits": {"pan": [c.pan_min, c.pan_max], "tilt": [c.tilt_min, c.tilt_max]},
             "command_gaps": self._gap_stats(),
             "following": self.following,
+            "follow_gaps_ms": {"tracker": self._worst_gap(self._follow_gaps), "page": self._worst_gap(self._client_gaps)},
             "command_age": round(time.monotonic() - self.last_command, 2) if self.last_command else None,
         }

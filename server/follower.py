@@ -118,7 +118,11 @@ class Follower:
                     self._reset()
                     self.loop.call_soon_threadsafe(self.ctl.stop_following, "camera size changed")
                     continue
+                began = time.monotonic()
                 previous, self.latest, self.latest_time = self.latest_time, self.tracker.update(frame), stamp
+                took = time.monotonic() - began
+                if took > 0.2:
+                    log.warning("slow tracker step: %.0f ms (%s, %s)", took * 1000, self.latest.state, self.latest.reason or "-")
                 if previous and stamp > previous:
                     self.rate += 0.1 * (1 / (stamp - previous) - self.rate)
                 event = (self.latest.state, self.latest.reason)
