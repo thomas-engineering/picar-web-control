@@ -49,6 +49,30 @@ moves the camera. Nothing has been pushed to GitHub; all commits are local.
 - [ ] The page's follow bar was only checked in headless Chrome at the five sizes; look at it on
       the phone.
 
+## Camera picture quality
+
+The webcam (a generic UVC camera) only has brightness, contrast, saturation, hue, gamma, sharpness,
+backlight compensation and power-line frequency; no exposure, gain or white-balance control, so
+auto exposure and auto white balance cannot be locked. Raw YUYV only, 640x480 at most.
+
+- [ ] **A/B test camera settings with real clips.** Add an option to `tools/record_clip.py` to set
+      controls (for example `--set sharpness=0 --set saturation=120`), record the same scene with
+      the object a few times (default, sharpness 0 to 2, saturation 110 to 130, both), and compare
+      with `tools/object_test.py` and `tools/compare_trackers.py`. Needs the user to hold the object
+      in front of the camera for a few short clips. Keep power-line frequency at 50 Hz.
+- [ ] **Apply the best settings in `Camera._open`** (`server/camera.py`, via `cv2.CAP_PROP_*` or
+      `v4l2-ctl`) so they apply on every reopen, and check they survive the camera restarting.
+- [ ] **Add light** (a lamp or a small LED light on the car): in dim rooms the camera drops to 10 to
+      15 fps and blurs motion. Compare frame rate and tracker results with and without it.
+- [ ] **Try capturing at 640x480 for the tracker** and sending 320x240 video. Small objects get four
+      times the pixels; measure CPU, tracker rate and control latency on the Pi
+      (`tools/lag_test.py --tracker`) before keeping it.
+- [ ] Check the lens focus at the distance the car is used (many cheap webcams have a manual focus
+      ring), and keep the lens clean.
+- [ ] If the picture is still the limit: a webcam with manual exposure and white balance, or a
+      Raspberry Pi camera module (full manual control, higher frame rate). That needs a code change
+      to read from it.
+
 ## Housekeeping
 
 - [ ] Push the commits to GitHub (`git push`) when the user says so. Check `git log` and that no
