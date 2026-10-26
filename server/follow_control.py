@@ -22,9 +22,10 @@ class Command:
 
 class FollowControl:
     # Camera geometry. The field of view is a guess for the webcam and only scales the bearing.
-    HALF_FOV = 27.0  # degrees from the image centre to its left and right edge
+    HALF_FOV = 27.0  # degrees from the image centre to its left and right edge (a guess, not measured)
     # Directions follow the page's stick convention (web/app.js): the camera looks right when the pan
-    # angle falls, and up when the tilt angle rises. Check both on the car, camera only, before driving.
+    # angle falls, and up when the tilt angle rises. Checked on the car (camera only): the camera turns
+    # toward the object. HALF_FOV is still a guess; it only scales how far the steering turns.
     PAN_SIGN = -1.0
     TILT_SIGN = -1.0
 
