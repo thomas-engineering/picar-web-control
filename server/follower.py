@@ -23,7 +23,8 @@ log = logging.getLogger("picar.follow")
 SPEED_CAP_DUTY = 30  # percent motor duty; follow mode never drives faster
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,31}$")
 THUMBNAIL = 96  # pixels, longest side of a saved object's picture
-JOB_TIMEOUT = 3.0  # seconds to wait for the tracker thread to take a job
+TRACKER_NICE = 10  # scheduling niceness of the tracker thread
+JOB_TIMEOUT = 6.0  # seconds to wait for the tracker thread to take a job; the camera needs a few to start
 
 
 class Busy(Exception):
@@ -38,10 +39,15 @@ class Follower:
         self.models = all(os.path.exists(os.path.join(models_dir, n)) for n in NANO_MODELS)
         self.tracker = ObjectTracker(models_dir)
         self.control = None
+        # Until PICAR_FOLLOW_DRIVE=1 is set, steering and throttle stay at zero and only the camera follows
+        # the object: the pan and tilt directions must be checked that way before the car may drive.
+        self.drive = os.environ.get("PICAR_FOLLOW_DRIVE") == "1"
         self.latest = Track("idle")
         self.latest_time = 0.0
         self.name = None  # name of the saved object in use
         self.ended = ""  # why follow mode last ended
+        self.rate = 0.0  # tracker results per second, smoothed
+        self.delay = 0.0  # seconds from the camera capturing a frame to its result reaching the control law
         self.thumbnail = None
         controller.on_follow_end = self._ended
         cv2.setNumThreads(int(os.environ.get("PICAR_TRACKER_THREADS", "3")))  # the Pi 3 has 4 cores
@@ -82,6 +88,12 @@ class Follower:
     # ---- tracker thread ----
 
     def _run(self):
+        # Lower priority, so that the event loop, the video encoder and the Wi-Fi driver win the CPU
+        # when the Pi is busy; OpenCV's worker threads inherit this when they are started from here.
+        try:
+            os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), TRACKER_NICE)
+        except OSError:
+            log.warning("cannot lower the tracker priority")
         seen = 0
         while True:
             with self._cond:
@@ -105,7 +117,9 @@ class Follower:
                     self._reset()
                     self.loop.call_soon_threadsafe(self.ctl.stop_following, "camera size changed")
                     continue
-                self.latest, self.latest_time = self.tracker.update(frame), stamp
+                previous, self.latest, self.latest_time = self.latest_time, self.tracker.update(frame), stamp
+                if previous and stamp > previous:
+                    self.rate += 0.1 * (1 / (stamp - previous) - self.rate)
                 self.loop.call_soon_threadsafe(self._step, self.latest, frame.shape, stamp)
             except Exception:
                 log.exception("tracker failed")
@@ -126,22 +140,26 @@ class Follower:
         try:
             return await asyncio.wait_for(asyncio.wrap_future(future), JOB_TIMEOUT)
         except asyncio.TimeoutError:
-            future.cancel()
+            if not future.cancel():  # the tracker thread had just started it: let it finish
+                return await asyncio.wrap_future(future)
             raise ValueError("the camera is not delivering frames") from None
 
     # ---- event loop ----
 
     def _step(self, track, shape, stamp):
         ctl = self.ctl
+        now = time.monotonic()
+        self.delay += 0.1 * (now - stamp - self.delay)
         if not ctl.following:
             return
         try:
-            now = time.monotonic()
             command = self.control.update(track, (shape[1], shape[0]), now - stamp, ctl.pan, ctl.tilt, now)
             if command.mode == "gave_up":
                 ctl.halt("target lost")
-            else:
+            elif self.drive:
                 ctl.follow_step(command.steer, command.throttle, command.pan_rate, command.tilt_rate)
+            else:
+                ctl.follow_step(0.0, 0.0, command.pan_rate, command.tilt_rate)
         except Exception:
             log.exception("follow step failed")
             ctl.halt("error")
@@ -274,4 +292,7 @@ class Follower:
             "ended": self.ended,
             "models": self.models,
             "speed_cap_duty": SPEED_CAP_DUTY,
+            "drive": self.drive,
+            "tracker_fps": round(self.rate, 1),
+            "tracker_delay_ms": round(self.delay * 1000),
         }

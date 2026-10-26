@@ -8,6 +8,9 @@ over the WebSocket like the web page does, pings the Pi, and prints:
 video rate, control round trip (median, 95th percentile, worst), ping loss and the Pi's CPU,
 socket backlog, undervoltage events and TCP retransmissions (the last group needs --ssh).
 
+With --tracker the follow-mode tracker runs during the test (it learns whatever is in front of the camera and
+does not drive).
+
 Run it from a machine on the same Wi-Fi path as the phone. It takes over the controls and moves
 the camera, so do not run it while driving. It leaves the camera on the default resolution.
 """
@@ -66,6 +69,10 @@ async def run(args, label, max_res):
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
     )
 
+    if args.tracker:  # follow mode's tracker costs CPU: measure with it running (the object is whatever is in front)
+        request = urllib.request.Request(f"{base}/api/follow/learn", method="POST")
+        urllib.request.urlopen(request, timeout=15).read()
+
     rtts = []
     ws = await websockets.connect(f"ws://{args.host}/ws", ping_interval=None)
 
@@ -90,6 +97,8 @@ async def run(args, label, max_res):
     task.cancel()
     await ws.close()
     stop.set()
+    if args.tracker:
+        urllib.request.urlopen(urllib.request.Request(f"{base}/api/follow", method="DELETE"), timeout=15).read()
 
     rtts.sort()
     pct = lambda p: rtts[min(len(rtts) - 1, int(len(rtts) * p))]
@@ -100,8 +109,10 @@ async def run(args, label, max_res):
           f"avg frame {video['bytes'] / max(1, video['frames']) / 1024:.0f} KiB")
     print(f"control round trip: median {pct(.5):.0f} ms, p95 {pct(.95):.0f} ms, worst {rtts[-1]:.0f} ms; "
           f"over 100 ms: {sum(r > 100 for r in rtts)}/{len(rtts)}")
-    if len(ping_lines) >= 2:
+    if len(ping_lines) >= 2 and ping_lines[-2].count(",") >= 2:
         print(f"ping: {ping_lines[-2].split(',')[2].strip()}; {ping_lines[-1]}")
+    else:
+        print("ping: no summary (does the host name resolve to an address that answers?)")
     if probe:
         print(probe.communicate()[0].rstrip(), flush=True)
 
@@ -111,6 +122,7 @@ async def main():
     parser.add_argument("--host", required=True, help="server as host:port, for example picar.local:8000")
     parser.add_argument("--ssh", help="user@host of the Pi, to also sample its CPU, queues and power")
     parser.add_argument("--secs", type=int, default=30, help="length of each run (default 30)")
+    parser.add_argument("--tracker", action="store_true", help="learn an object first, so follow mode's tracker runs during the test")
     parser.add_argument("--only", choices=["default", "max"], help="test just one resolution")
     args = parser.parse_args()
     try:

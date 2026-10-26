@@ -250,7 +250,7 @@ function followText(f) {
   if (followNote) return followNote;
   if (!f.learned) return "Hold an object in the corners";
   const pct = Math.round(f.confidence * 100) + "%";
-  let text = f.state === "tracking" ? (f.following ? "Following " : "Tracking ") + pct : LOST[f.reason] || "Lost it";
+  let text = f.state === "tracking" ? (f.following ? (f.drive === false ? "Following (camera only) " : "Following ") : "Tracking ") + pct : LOST[f.reason] || "Lost it";
   if (f.state === "tracking" && f.tier === "track-only") text += " (no colour: cannot be found again)";
   if (!f.following && f.ended && ENDED[f.ended]) text = ENDED[f.ended] + " · " + text;
   return text;

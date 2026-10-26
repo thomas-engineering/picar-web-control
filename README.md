@@ -106,7 +106,9 @@ Two kinds of objects:
 Setup on the Pi: `deploy/fetch_models.sh` downloads the NanoTrack model files into `models/`
 (not part of the repository). Without them only objects with colour work. Saved objects go to
 `data/objects/` (override with `PICAR_OBJECTS`), `PICAR_MODELS` changes the model directory and
-`PICAR_TRACKER_THREADS` the number of OpenCV threads (default 3).
+`PICAR_TRACKER_THREADS` the number of OpenCV threads (default 3). Follow mode starts in
+camera-only mode: the camera follows the object, and the car neither steers nor drives, until
+`PICAR_FOLLOW_DRIVE=1` is set for the service. Check first that the camera turns toward the object.
 
 ### Calibration
 

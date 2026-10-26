@@ -30,8 +30,9 @@ vanilla-JS page in `web/` (no build step, no framework). See README.md for the f
   stop (see `Controller.run`), on any manual input, and when the page loses focus. Keep its speed
   cap. `tools/follow_e2e.py` checks all of this; run it after any change to `control.py`,
   `follower.py` or `app.py`.
-- Ask before the first motor test of follow mode, and do the camera-only test first (wheels off the
-  ground): the pan and tilt directions in `follow_control.py` are assumptions until then.
+- Follow mode drives only with `PICAR_FOLLOW_DRIVE=1` set for the service; by default only the camera
+  follows. Do the camera-only test first: the pan and tilt directions in `follow_control.py` are
+  assumptions until then. Ask before enabling driving, and keep the wheels off the ground for the first run.
 
 ## Conventions
 - Match the existing style: short docstrings, comments only for the why, no new dependencies

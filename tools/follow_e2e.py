@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """End-to-end check of follow mode against the mock server (fake hardware, synthetic camera).
 
-    .venv/bin/python tools/follow_e2e.py
+    .venv/bin/python tools/follow_e2e.py [--camera-only]
 
 It plays the part of the page: a video viewer, a WebSocket that sends idle control messages every
-30 ms, and the HTTP calls. Then it checks every way follow mode has to end and the limits it keeps.
+30 ms, and the HTTP calls. --camera-only starts the server with PICAR_FOLLOW_DRIVE=0 and checks that
+it never drives or steers (the server default, without PICAR_FOLLOW_DRIVE=1). Then it checks every way follow mode has to end and the limits it keeps.
 Needs models/ (deploy/fetch_models.sh). Exit status 1 means a check failed.
 """
 import asyncio
@@ -151,7 +152,8 @@ async def main():
         print("SKIP: run deploy/fetch_models.sh first")
         return 0
     objects = tempfile.mkdtemp(prefix="picar_e2e_")
-    env = dict(os.environ, PICAR_OBJECTS=objects)
+    camera_only = "--camera-only" in sys.argv  # the server is started with PICAR_FOLLOW_DRIVE=0
+    env = dict(os.environ, PICAR_OBJECTS=objects, PICAR_FOLLOW_DRIVE="0" if camera_only else "1")  # driving has to be switched on
     server = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "mock_server.py"), str(PORT)],
                               env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
@@ -188,7 +190,11 @@ async def main():
         pans = [s["pan"] for s in samples]
         cap = 0.2875  # 30 % duty with the default min and max speed
         check("still following after 7 s", samples[-1]["following"], samples[-1]["follow"]["ended"])
-        check("it drives when the ball gets smaller (farther away)", max(throttles) > 0.09, "max throttle %.3f" % max(throttles))
+        if camera_only:
+            check("camera only: never drives or steers", all(t == 0 for t in throttles) and all(s["steer"] == 0 for s in samples),
+                  "max throttle %.3f" % max(throttles))
+        else:
+            check("it drives when the ball gets smaller (farther away)", max(throttles) > 0.09, "max throttle %.3f" % max(throttles))
         check("throttle stays within 0 and the 30 % duty cap", all(0 <= t <= cap + 1e-6 for t in throttles),
               "max %.3f, cap %.3f" % (max(throttles), cap))
         check("steering stays within -1 and 1", all(-1 <= s["steer"] <= 1 for s in samples))
