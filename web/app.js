@@ -258,7 +258,7 @@ function followText(f) {
 function renderFollow() {
   const f = followState;
   $("follow_status").textContent = followText(f);
-  $("learn").hidden = f.learned;
+  $("learn").hidden = f.learned && f.state !== "lost";  // a lost object can be learned again
   $("follow").hidden = !f.learned;
   $("forget").hidden = !f.learned || f.following;
   $("follow").textContent = f.following ? "Stop following" : "Follow";

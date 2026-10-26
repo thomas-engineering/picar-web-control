@@ -32,6 +32,16 @@ NANO_MIN_SCORE = 0.3
 REDETECT_DIST = 0.45  # a blob must be this close to the learned look to be the object again
 REDETECT_MARGIN = 0.1  # the best blob must beat the runner-up by this much, else it is ambiguous
 REDETECT_FRAMES = 3  # frames in a row the same blob must be found before tracking resumes
+# An object without colour is checked by two cues, the colour/brightness histogram and the brightness
+# histogram alone. Its first second after Learn is not checked: the learn box is loose, so at the end of
+# that second the reference is taken again from the (tight) tracked box. The limits then follow how much
+# the object varies by itself during the next second, but never fall below the floor.
+V_BINS = 16
+SETTLE_FRAMES = 20
+BASELINE_FRAMES = 20
+TRACK_ONLY_FLOOR = (0.45, 0.47)  # lowest limits for (colour/brightness, brightness) distances
+TRACK_ONLY_CEIL = (0.70, 0.70)
+TRACK_ONLY_MARGIN = (0.12, 0.10)  # added to the largest distance seen during the baseline
 MIN_BOX = 8
 RETICLE = 0.3  # side of the learn box as a share of the image height
 NANO_MODELS = ("nanotrack_backbone_sim.onnx", "nanotrack_head_sim.onnx")
@@ -220,6 +230,18 @@ def _verify_hist(frame, box):
     return cv2.normalize(hist, None, 1, 0, cv2.NORM_L1).flatten().astype(np.float32)
 
 
+def _brightness_hist(frame, box):
+    """Histogram of the brightness of the pixels inside box."""
+    height, width = frame.shape[:2]
+    x, y, w, h = box
+    x, y = max(x, 0), max(y, 0)
+    patch = frame[y:min(y + h, height), x:min(x + w, width)]
+    if patch.size == 0:
+        return None
+    hist = cv2.calcHist([cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)], [0], None, [V_BINS], [0, 256])
+    return cv2.normalize(hist, None, 1, 0, cv2.NORM_L1).flatten().astype(np.float32)
+
+
 def _distance(a, b):
     return 1.0 if a is None or b is None else float(cv2.compareHist(a, b, cv2.HISTCMP_BHATTACHARYYA))
 
@@ -252,6 +274,10 @@ class ObjectTracker:
         self.reason = ""
         self._box = None
         self._verify = None
+        self._verify_v = None
+        self._baseline = []  # (colour/brightness, brightness) distances during the second after the settling
+        self._limits = TRACK_ONLY_FLOOR
+        self._frames = 0  # tracked frames since Learn
         self._ref_height = None
         self._height_rel = None  # reference height as a share of the frame height, for saved objects
         self._bad = self._drift = self._seen = 0
@@ -302,7 +328,9 @@ class ObjectTracker:
             self.colour._ref_height = float(box[3])
         self._ref_height = float(box[3])
         self._height_rel = self._ref_height / height
-        self._verify = _verify_hist(frame, box) if coloured else None
+        self._verify = _verify_hist(frame, box)
+        self._verify_v = _brightness_hist(frame, box)
+        self._baseline, self._limits, self._frames = [], TRACK_ONLY_FLOOR, 0
         self._start(frame, box)
         return Track("tracking", box, 1.0, 1.0)
 
@@ -352,14 +380,34 @@ class ObjectTracker:
             return Track("tracking", self._box, 0.0, self._box[3] / self._ref_height)
         self._bad = 0
         self._box = box
-        match = 1.0
+        distance = _distance(self._verify, _verify_hist(frame, box))
         if self.tier == "colour":
-            distance = _distance(self._verify, _verify_hist(frame, box))
-            self._drift = self._drift + 1 if distance > DRIFT_DIST else 0
-            if self._drift >= DRIFT_FRAMES:
-                return self._lose("drift")
+            drifting = distance > DRIFT_DIST
             match = min(1.0, max(0.0, (VERIFY_BAD - distance) / (VERIFY_BAD - VERIFY_GOOD)))
+        else:
+            drifting, match = self._check_plain(frame, box, distance)
+        self._drift = self._drift + 1 if drifting else 0
+        if self._drift >= DRIFT_FRAMES:
+            return self._lose("drift")
         return Track("tracking", box, min(score, 1.0) * match, box[3] / self._ref_height)
+
+    def _check_plain(self, frame, box, colour_distance):
+        """The drift check for an object without colour. Returns (drifting, how well it still matches 0..1)."""
+        self._frames += 1
+        if self._frames < SETTLE_FRAMES:
+            return False, 1.0
+        if self._frames == SETTLE_FRAMES:
+            self._verify, self._verify_v = _verify_hist(frame, box), _brightness_hist(frame, box)
+            return False, 1.0
+        brightness_distance = _distance(self._verify_v, _brightness_hist(frame, box))
+        if len(self._baseline) < BASELINE_FRAMES:
+            self._baseline.append((colour_distance, brightness_distance))
+            if len(self._baseline) == BASELINE_FRAMES:
+                self._limits = tuple(
+                    min(ceil, max(floor, max(b[i] for b in self._baseline) + margin))
+                    for i, (floor, ceil, margin) in enumerate(zip(TRACK_ONLY_FLOOR, TRACK_ONLY_CEIL, TRACK_ONLY_MARGIN)))
+        excess = max(colour_distance / self._limits[0], brightness_distance / self._limits[1])
+        return excess > 1.0, min(1.0, max(0.0, (1.25 - excess) / 0.25))
 
     def _search(self, frame):
         """Lost: for an object with colour, look for it in the whole frame."""

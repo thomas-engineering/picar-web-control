@@ -99,9 +99,9 @@ Two kinds of objects:
   colours, so the car notices when the tracker has drifted onto something else, and finds the
   object again after it was hidden. A coloured object can be saved by name in Settings and loaded
   later; the car then looks for it.
-- **Without colour** (a plain grey object): followed only while it stays in view. The tracker cannot
-  notice that it switched to something else, for example a hand in front of it, and cannot find the
-  object again, so learn it again after a loss. The page says so.
+- **Without colour** (a plain grey object): followed while it stays in view, and checked by its
+  brightness and look, which is less reliable than colour: a hand covering it is noticed after about
+  half a second, but it cannot be found again, so learn it again after a loss. The page says so.
 
 Setup on the Pi: `deploy/fetch_models.sh` downloads the NanoTrack model files into `models/`
 (not part of the repository). Without them only objects with colour work. Saved objects go to

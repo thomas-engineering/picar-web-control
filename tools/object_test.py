@@ -5,7 +5,7 @@
 
 The expected positions were read off the frames by eye. clips/bright-ball is a red disc that is
 fully hidden by a hand at frames 234-258 while a second red object sits at the left edge;
-clips/grey-box is a small plain grey cube. Exit status 1 means a check failed.
+clips/grey-box is a small plain grey cube that a second hand covers at frames 63-68. Exit status 1 means a check failed.
 """
 import glob
 import os
@@ -87,6 +87,13 @@ def main():
     tracks = [tracker.update(f) for f in cube]
     check("grey cube: tier is track-only", tracker.tier == "track-only")
     check("grey cube: followed at the start", tracks[45].state == "tracking" and tracks[45].box[0] > 100, "box at 45 %s" % (tracks[45].box,))
+    lost = next((i for i, t in enumerate(tracks) if t.state == "lost"), None)
+    check("grey cube: no false alarm while it is in view", lost is None or lost >= 64, "first loss at frame %s" % lost)
+    check("grey cube: a hand covering it is noticed (frames 63-68)", lost is not None and lost <= 80,
+          "lost at frame %s (%s)" % (lost, tracks[lost].reason if lost is not None else ""))
+    check("grey cube: it never sits on the wrong thing for long afterwards",
+          sum(t.state == "tracking" for t in tracks[lost:]) <= 0.1 * len(tracks[lost:]) if lost is not None else False,
+          "%d of %d frames still tracking after the loss" % (sum(t.state == "tracking" for t in tracks[lost:]), len(tracks[lost:])) if lost is not None else "")
     try:
         tracker.export()
         check("grey cube: cannot be saved", False)

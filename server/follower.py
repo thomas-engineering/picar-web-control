@@ -59,6 +59,7 @@ class Follower:
         self._wants_frames = False
         self._shape = None  # frame shape the object was learned at
         self._closed = False
+        self._event = None  # last (state, reason) that was logged
         self._thread = threading.Thread(target=self._run, name="tracker", daemon=True)
         self._thread.start()
 
@@ -120,6 +121,11 @@ class Follower:
                 previous, self.latest, self.latest_time = self.latest_time, self.tracker.update(frame), stamp
                 if previous and stamp > previous:
                     self.rate += 0.1 * (1 / (stamp - previous) - self.rate)
+                event = (self.latest.state, self.latest.reason)
+                if event != self._event:
+                    self._event = event
+                    log.info("tracker: %s %s (%s object, confidence %.2f)", event[0], event[1] or "-", self.tracker.tier,
+                             self.latest.confidence)
                 self.loop.call_soon_threadsafe(self._step, self.latest, frame.shape, stamp)
             except Exception:
                 log.exception("tracker failed")
