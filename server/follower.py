@@ -187,7 +187,7 @@ class Follower:
             return "the object is not clearly in view"
         cal = self.ctl.hw.cal
         cap = FollowControl.throttle_for_duty(SPEED_CAP_DUTY, cal.min_speed, cal.max_speed)
-        self.control = FollowControl((cal.pan_min, cal.pan_max), cap)
+        self.control = FollowControl((cal.pan_min, cal.pan_max), cap, (cal.tilt_min, cal.tilt_max))
         self.ended = ""
         self.ctl.start_following()
         return None

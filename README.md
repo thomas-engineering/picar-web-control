@@ -90,8 +90,10 @@ Follow mode ends, and the car stops, when:
 - you touch a stick, press STOP or space, or tap **Stop following**
 - the page loses focus, closes, is replaced by another device, or its messages stop for 0.3 s
 - the tracker stops delivering results for 0.3 s (the same watchdog as for manual driving)
-- the camera stops, or the object is not clearly in view (the car stops at once, the camera sweeps
-  for it for about 8 s, then follow mode gives up)
+- the camera stops, or the object is not clearly in view (the car stops at once; after half a second
+  the camera scans the whole pan range along three tilt rows, which takes about 20 s, and when it
+  finds the object again the car follows it once more; if the scan comes up empty, follow mode gives
+  up)
 
 Two kinds of objects:
 

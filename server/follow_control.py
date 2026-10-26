@@ -47,14 +47,17 @@ class FollowControl:
     MIN_CONFIDENCE = 0.35
     MAX_FRAME_AGE = 0.25  # seconds; older frames stop the car
     REACQUIRE_HOLD = 0.4  # seconds of steady tracking before driving after the target was lost
-    SEARCH_DELAY = 0.5  # seconds without the target before the camera starts sweeping
-    SEARCH_TIME = 8.0  # seconds of sweeping before giving up
-    SEARCH_RATE = 0.25  # camera rate while sweeping
+    SEARCH_DELAY = 0.5  # seconds without the target before the camera starts scanning
+    SEARCH_RATE = 0.25  # pan rate while scanning; faster would blur and smear the object between frames
+    SEARCH_MAX = 45.0  # seconds, a hard cap on the scan
+    ROW_STEP = 35.0  # degrees between the tilt rows of the scan, a bit less than the vertical field of view
+    ROW_REACHED = 4.0  # degrees from a row at which the camera counts as being on it
 
-    def __init__(self, pan_limits=(30.0, 150.0), max_throttle=0.3):
+    def __init__(self, pan_limits=(30.0, 150.0), max_throttle=0.3, tilt_limits=(50.0, 130.0)):
         if max_throttle < self.MIN_MOVE:
             raise ValueError("max_throttle %.2f is below the smallest driving throttle" % max_throttle)
         self.pan_limits = pan_limits
+        self.tilt_limits = tilt_limits
         self.max_throttle = max_throttle
         self.reset()
 
@@ -75,6 +78,9 @@ class FollowControl:
         self._last_error = 0.0
         self._search_dir = 1.0
         self._searching = False
+        self._rows = []  # tilt angles of the scan, in the order they are visited
+        self._row = 0
+        self._hits = 0  # pan limits reached in the current row
 
     def update(self, track, frame_size, frame_age, pan, tilt, now):
         """One control step. frame_age is how old the image behind track is, in seconds."""
@@ -86,7 +92,7 @@ class FollowControl:
             and frame_age <= self.MAX_FRAME_AGE
         )
         if not good:
-            return self._unseen(frame_age, pan, now)
+            return self._unseen(frame_age, pan, tilt, now)
         if self._good_since is None:
             self._good_since = now
             self._size = None
@@ -138,8 +144,8 @@ class FollowControl:
             self._throttle = max(self.MIN_MOVE, min(target, self._throttle + self.MAX_ACCEL * dt))
         return self._throttle
 
-    def _unseen(self, frame_age, pan, now):
-        """The target is not clearly in view: stop at once, and sweep the camera for it after a while."""
+    def _unseen(self, frame_age, pan, tilt, now):
+        """The target is not clearly in view: stop at once, and scan the camera over the whole range after a while."""
         self._throttle = 0.0
         self._steer = 0.0
         self._moving = False
@@ -150,17 +156,46 @@ class FollowControl:
         if frame_age > self.MAX_FRAME_AGE:
             return command  # the pipeline stalled: do not move the camera blind either
         gone = now - self._last_good
-        if gone > self.SEARCH_DELAY + self.SEARCH_TIME:
-            command.mode = "gave_up"
-        elif gone > self.SEARCH_DELAY:
-            low, high = self.pan_limits
-            if not self._searching:  # start toward the side where the target was last seen
-                self._searching = True
-                self._search_dir = self.PAN_SIGN * (1.0 if self._last_error >= 0 else -1.0)
-            if pan <= low + 2:
-                self._search_dir = 1.0
-            elif pan >= high - 2:
-                self._search_dir = -1.0
+        if gone > self.SEARCH_DELAY:
+            if not self._searching:
+                self._start_scan(tilt)
             command.mode = "searching"
-            command.pan_rate = self.SEARCH_RATE * self._search_dir
+            command.pan_rate, command.tilt_rate = self._scan_step(pan, tilt)
+            if self._row >= len(self._rows) or gone > self.SEARCH_MAX:
+                command.mode, command.pan_rate, command.tilt_rate = "gave_up", 0.0, 0.0
         return command
+
+    def _start_scan(self, tilt):
+        """Plan the scan: pan sweeps along a few tilt rows, the nearest row first."""
+        low, high = self.tilt_limits
+        middle = _clip(90.0, low, high)
+        rows = []
+        for level in (middle, middle + self.ROW_STEP, middle - self.ROW_STEP):
+            level = _clip(level, low, high)
+            if all(abs(level - other) > self.ROW_STEP / 3 for other in rows):  # a narrow range has fewer rows
+                rows.append(level)
+        self._rows, here = [], tilt
+        while rows:
+            here = min(rows, key=lambda level: abs(level - here))
+            rows.remove(here)
+            self._rows.append(here)
+        self._row = self._hits = 0
+        self._searching = True
+        self._search_dir = self.PAN_SIGN * (1.0 if self._last_error >= 0 else -1.0)  # first toward where it was last seen
+
+    def _scan_step(self, pan, tilt):
+        """Pan and tilt rates of the scan. The first row is swept both ways, because the scan starts mid-range."""
+        if self._row >= len(self._rows):
+            return 0.0, 0.0
+        error = self._rows[self._row] - tilt
+        tilt_rate = _clip(error / 20.0, -0.6, 0.6) if abs(error) > self.ROW_REACHED else 0.0
+        if abs(error) > 4 * self.ROW_REACHED:
+            return 0.0, tilt_rate  # first get to the row, then sweep
+        low, high = self.pan_limits
+        if (pan <= low + 2 and self._search_dir < 0) or (pan >= high - 2 and self._search_dir > 0):
+            self._search_dir = -self._search_dir
+            self._hits += 1
+            if self._hits >= (2 if self._row == 0 else 1):
+                self._row += 1
+                self._hits = 0
+        return self.SEARCH_RATE * self._search_dir, tilt_rate

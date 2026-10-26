@@ -33,6 +33,8 @@ SPEED_PER_DUTY = 0.8  # m/s at 100 % duty
 MIN_DUTY, MAX_DUTY, DEADZONE = 20, 60, 0.05  # as in the calibration and hardware.py
 CAMERA_RATE = 90.0  # degrees per second at rate 1.0 (Controller.CAMERA_SPEED)
 PAN_LIMITS = (30.0, 150.0)
+TILT_LIMITS = (50.0, 130.0)
+HALF_FOV_V = 20.0  # degrees, half the vertical field of view
 SPEED_CAP_DUTY = 30  # percent, the speed cap of follow mode
 MAX_THROTTLE = FollowControl.throttle_for_duty(SPEED_CAP_DUTY, MIN_DUTY, MAX_DUTY, DEADZONE)
 
@@ -47,17 +49,19 @@ def duty_speed(throttle):
 
 class Run:
     def __init__(self, path, hidden=lambda t: False, latency=0.15, speed_scale=1.0, noise=True, seed=1,
-                 max_throttle=MAX_THROTTLE, confidence=0.9):
+                 max_throttle=MAX_THROTTLE, confidence=0.9, elevation=lambda t: 0.0):
         self.path, self.hidden, self.latency, self.speed_scale = path, hidden, latency, speed_scale
+        self.elevation = elevation  # degrees of the target above the level of the camera, as a function of time
         self.noise = noise
         self.confidence = confidence
         self.rng = random.Random(seed)
-        self.control = FollowControl(PAN_LIMITS, max_throttle)
+        self.control = FollowControl(PAN_LIMITS, max_throttle, TILT_LIMITS)
         self.max_throttle = max_throttle
         self.x = self.y = self.theta = 0.0  # theta: heading in radians, positive turns right
         self.pan = 90.0
+        self.tilt = 90.0
         self.t = 0.0
-        self.history = []  # (t, x, y, theta, pan)
+        self.history = []  # (t, x, y, theta, pan, tilt)
         self.log = []  # per control step: dict
 
     def target(self, t):
@@ -66,30 +70,32 @@ class Run:
     def measure(self):
         """The Track the camera pipeline delivers now: an image of the world `latency` ago."""
         t = self.t - self.latency
-        past = min(self.history, key=lambda h: abs(h[0] - t)) if self.history else (0, 0, 0, 0, 90.0)
-        _, cx, cy, theta, pan = past
+        past = min(self.history, key=lambda h: abs(h[0] - t)) if self.history else (0, 0, 0, 0, 90.0, 90.0)
+        _, cx, cy, theta, pan, tilt = past
         tx, ty = self.target(t)
         dx, dy = tx - cx, ty - cy
         distance = math.hypot(dx, dy)
         psi = math.atan2(dx, dy) - (theta + math.radians(90.0 - pan))
         psi = (psi + math.pi) % (2 * math.pi) - math.pi
         depth = distance * math.cos(psi)
-        if self.hidden(t) or depth <= 0.05:
+        up = self.elevation(t) - (tilt - 90.0)  # degrees above the optical axis
+        if self.hidden(t) or depth <= 0.05 or abs(up) >= HALF_FOV_V:
             return Track("lost"), distance
         px = WIDTH / 2 + FOCAL * math.tan(psi)
+        py = HEIGHT / 2 - FOCAL * math.tan(math.radians(up))
         size_px = FOCAL * TARGET_HEIGHT / depth
         if self.noise:
             px += self.rng.gauss(0, 2)
             size_px *= 1 + self.rng.gauss(0, 0.05)
         if not -size_px / 2 < px < WIDTH + size_px / 2 or size_px > HEIGHT:
             return Track("lost"), distance
-        box = (int(px - size_px / 2), int(HEIGHT / 2 - size_px / 2), int(size_px), int(size_px))
+        box = (int(px - size_px / 2), int(py - size_px / 2), int(size_px), int(size_px))
         return Track("tracking", box, self.confidence, size_px / REF_HEIGHT), distance
 
     def step(self, frame_age=None):
         track, distance = self.measure()
         age = self.latency if frame_age is None else frame_age
-        command = self.control.update(track, (WIDTH, HEIGHT), age, self.pan, 90.0, self.t)
+        command = self.control.update(track, (WIDTH, HEIGHT), age, self.pan, self.tilt, self.t)
         speed = duty_speed(command.throttle) * self.speed_scale
         wheel = command.steer * MAX_WHEEL_ANGLE
         end = self.t + FRAME_DT
@@ -98,13 +104,14 @@ class Run:
             self.y += speed * math.cos(self.theta) * SIM_DT
             self.theta += speed / WHEELBASE * math.tan(wheel) * SIM_DT
             self.pan = max(PAN_LIMITS[0], min(PAN_LIMITS[1], self.pan + command.pan_rate * CAMERA_RATE * SIM_DT))
+            self.tilt = max(TILT_LIMITS[0], min(TILT_LIMITS[1], self.tilt + command.tilt_rate * CAMERA_RATE * SIM_DT))
             self.t += SIM_DT
-            self.history.append((self.t, self.x, self.y, self.theta, self.pan))
+            self.history.append((self.t, self.x, self.y, self.theta, self.pan, self.tilt))
         tx, ty = self.target(self.t)
         self.log.append({
             "t": self.t, "distance": math.hypot(tx - self.x, ty - self.y), "throttle": command.throttle,
             "steer": command.steer, "mode": command.mode, "seen": track.state == "tracking",
-            "moved": speed > 0, "pan": self.pan, "pan_rate": command.pan_rate,
+            "moved": speed > 0, "pan": self.pan, "tilt": self.tilt, "pan_rate": command.pan_rate,
             "in_view": self.in_view(),
         })
 
@@ -154,6 +161,7 @@ def basics(log, max_throttle):
         all(0 <= r["throttle"] <= max_throttle + 1e-9 for r in log)
         and all(-1 <= r["steer"] <= 1 for r in log)
         and all(PAN_LIMITS[0] <= r["pan"] <= PAN_LIMITS[1] for r in log)
+        and all(TILT_LIMITS[0] <= r["tilt"] <= TILT_LIMITS[1] for r in log)
     )
 
 
@@ -211,14 +219,29 @@ def main():
               all(r["throttle"] == 0 for r in during), any(r["throttle"] > 0 for r in after)))
 
     run = Run(walk_away(0.12), hidden=lambda t: t >= 5.0)
-    log = run.run(20)
+    log = run.run(60)
+    lost_at = 5.0 + run.latency + FRAME_DT
     gave_up = next((r["t"] for r in log if r["mode"] == "gave_up"), None)
-    searching = any(r["mode"] == "searching" for r in log)
-    stopped = all(r["throttle"] == 0 for r in log if r["t"] > 5.0 + run.latency + FRAME_DT)
-    check("target lost for good", basics(log, MAX_THROTTLE) and searching and stopped and gave_up is not None
-          and gave_up < 5.0 + run.latency + 9.5,
-          "searched: %s, gave up at %s s, no motion after loss: %s" % (
-              searching, "%.1f" % gave_up if gave_up else "never", stopped))
+    scan = [r for r in log if r["mode"] == "searching"]
+    stopped = all(r["throttle"] == 0 for r in log if r["t"] > lost_at)
+    covered = bool(scan) and min(r["pan"] for r in scan) <= PAN_LIMITS[0] + 3 and max(r["pan"] for r in scan) >= PAN_LIMITS[1] - 3 \
+        and min(r["tilt"] for r in scan) <= TILT_LIMITS[0] + 10 and max(r["tilt"] for r in scan) >= TILT_LIMITS[1] - 10
+    check("target lost for good: the whole range is scanned", basics(log, MAX_THROTTLE) and stopped and covered
+          and gave_up is not None and gave_up - lost_at < 40,
+          "pan %.0f..%.0f, tilt %.0f..%.0f, gave up %s s after the loss, no motion: %s" % (
+              min(r["pan"] for r in scan), max(r["pan"] for r in scan), min(r["tilt"] for r in scan), max(r["tilt"] for r in scan),
+              "%.0f" % (gave_up - lost_at) if gave_up else "never", stopped))
+
+    # The target jumps to the side and above the camera's view: only the scan can find it again.
+    for label, jump_x, jump_elevation in (("aside and above", 0.9, 30.0), ("aside and below", -0.9, -30.0), ("straight above", 0.0, 32.0)):
+        run = Run(lambda t, jx=jump_x: (jx if t > 3 else 0.0, 0.6),
+                  elevation=lambda t, e=jump_elevation: e if t > 3 else 0.0)
+        log = run.run(60)
+        lost_at = 3.0 + run.latency
+        found = next((r["t"] for r in log if r["t"] > lost_at + 1 and r["seen"] and r["mode"] == "following"), None)
+        idle = all(r["throttle"] == 0 for r in log if lost_at < r["t"] < (found or 99))
+        check("target jumps %s: found again by the scan" % label, basics(log, MAX_THROTTLE) and found is not None and found - lost_at < 40 and idle,
+              "found %s s after it left, no motion while lost: %s" % ("%.0f" % (found - lost_at) if found else "never", idle))
 
     run = Run(walk_away(0.15), latency=0.4)
     log = run.run(10)
