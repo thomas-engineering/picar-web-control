@@ -8,3 +8,6 @@ data/
 # downloaded tools
 imager/
 *.AppImage
+
+# test clips recorded on the Pi (they show the room)
+clips/
