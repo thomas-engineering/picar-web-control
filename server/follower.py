@@ -60,6 +60,7 @@ class Follower:
         self._shape = None  # frame shape the object was learned at
         self._closed = False
         self._event = None  # last (state, reason) that was logged
+        self._info_time = 0.0
         self._thread = threading.Thread(target=self._run, name="tracker", daemon=True)
         self._thread.start()
 
@@ -126,6 +127,9 @@ class Follower:
                 if previous and stamp > previous:
                     self.rate += 0.1 * (1 / (stamp - previous) - self.rate)
                 event = (self.latest.state, self.latest.reason)
+                if self.latest.state == "lost" and self.tracker.search_info and stamp - self._info_time > 2.0:
+                    self._info_time = stamp
+                    log.info("searching: %s", self.tracker.search_info)
                 if event != self._event:
                     self._event = event
                     log.info("tracker: %s %s (%s object, confidence %.2f)", event[0], event[1] or "-", self.tracker.tier,

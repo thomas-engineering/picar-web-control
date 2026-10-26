@@ -92,7 +92,7 @@ class FollowControl:
             and frame_age <= self.MAX_FRAME_AGE
         )
         if not good:
-            return self._unseen(frame_age, pan, tilt, now)
+            return self._unseen(track, frame_age, pan, tilt, now)
         if self._good_since is None:
             self._good_since = now
             self._size = None
@@ -144,7 +144,7 @@ class FollowControl:
             self._throttle = max(self.MIN_MOVE, min(target, self._throttle + self.MAX_ACCEL * dt))
         return self._throttle
 
-    def _unseen(self, frame_age, pan, tilt, now):
+    def _unseen(self, track, frame_age, pan, tilt, now):
         """The target is not clearly in view: stop at once, and scan the camera over the whole range after a while."""
         self._throttle = 0.0
         self._steer = 0.0
@@ -160,7 +160,8 @@ class FollowControl:
             if not self._searching:
                 self._start_scan(tilt)
             command.mode = "searching"
-            command.pan_rate, command.tilt_rate = self._scan_step(pan, tilt)
+            if track.reason != "confirming":  # while a candidate is being checked the picture must stand still
+                command.pan_rate, command.tilt_rate = self._scan_step(pan, tilt)
             if self._row >= len(self._rows) or gone > self.SEARCH_MAX:
                 command.mode, command.pan_rate, command.tilt_rate = "gave_up", 0.0, 0.0
         return command

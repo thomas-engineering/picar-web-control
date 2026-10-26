@@ -38,8 +38,18 @@ DRIFT_DIST = 0.45  # hue distance above which the box no longer shows the learne
 DRIFT_FRAMES = 3  # frames in a row beyond the limit before the object counts as lost
 NANO_MIN_SCORE = 0.3
 REDETECT_HUE = 0.40  # a blob must be this close in hue to be the object again
-REDETECT_SHAPE = 0.26  # and this close in the directions of its edges: a round disc is not a square box
-REDETECT_SIZE = 1.4  # and at most this factor taller or shorter than it was while it was tracked well
+REDETECT_SIZE = 1.25  # and at most this factor taller or shorter than any height it had while it was tracked well
+# While the object is tracked well, the tracker remembers views of it (shapes and heights) and the other
+# blobs of the same colour in the picture, which are not the object. A candidate after a loss has to look
+# more like the views than like those look-alikes. What was seen in the last second before a loss is
+# thrown away, because the track may already have been on something else.
+EXEMPLAR_EVERY = 8  # tracked frames between the views of the object that are remembered
+EXEMPLARS = 12  # views remembered besides the one from Learn
+IMPOSTOR_EVERY = 5  # tracked frames between looks for same-coloured blobs elsewhere
+IMPOSTORS = 12
+COMMIT_AFTER = 20  # tracked frames before something that was seen counts as certain
+VIEW_LIMIT = 0.34  # a candidate's edge shape may differ this much from the nearest remembered view
+IMPOSTOR_MARGIN = 0.03  # and it has to be closer to a view than to an impostor by this much
 REDETECT_MARGIN = 0.1  # among those, the best look must beat the runner-up by this much, else it is ambiguous
 REDETECT_FRAMES = 3  # frames in a row the same blob must be found before tracking resumes
 # An object without colour: its first second after Learn is not checked, because the learn box is loose,
@@ -60,7 +70,7 @@ class Track:
     box: tuple | None = None  # x, y, w, h in pixels
     confidence: float = 0.0  # 0..1, how well the box matches the learned colours
     size: float = 0.0  # box height relative to the height at learn time
-    reason: str = ""  # why the object is lost: "drift", "searching", "ambiguous", "track-only" or "lost"
+    reason: str = ""  # why the object is lost: "drift", "searching", "confirming", "ambiguous", "track-only" or "lost"
 
 
 class ColorTracker:
@@ -270,10 +280,8 @@ def _distance(a, b):
     return 1.0 if a is None or b is None else float(cv2.compareHist(a, b, cv2.HISTCMP_BHATTACHARYYA))
 
 
-def _overlap(a, b):
-    ix = max(0, min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0]))
-    iy = max(0, min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1]))
-    return ix * iy / float(a[2] * a[3] + b[2] * b[3] - ix * iy)
+def _centre_distance(a, b):
+    return ((a[0] + a[2] / 2 - b[0] - b[2] / 2) ** 2 + (a[1] + a[3] / 2 - b[1] - b[3] / 2) ** 2) ** 0.5
 
 
 class ObjectTracker:
@@ -304,7 +312,12 @@ class ObjectTracker:
         self._limit = SHAPE_FLOOR
         self._frames = 0  # tracked frames since Learn
         self._ref_height = None
-        self._heights = collections.deque(maxlen=45)  # box heights of the last frames that matched well
+        self._heights = collections.deque(maxlen=150)  # box heights of the last frames that matched well
+        self._exemplars = collections.deque(maxlen=EXEMPLARS)  # edge-direction histograms of views while tracked well
+        self._impostors = collections.deque(maxlen=IMPOSTORS)  # edge-direction histograms of same-coloured other blobs
+        self._pending = collections.deque()  # (good frame, kind, value) seen but not yet certain
+        self._good = 0  # frames that matched well since Learn
+        self.search_info = ""  # why candidates were turned down, for the log
         self._height_rel = None  # reference height as a share of the frame height, for saved objects
         self._bad = self._drift = self._seen = 0
         self._candidate = None
@@ -359,6 +372,10 @@ class ObjectTracker:
         self._shape = _shape_hist(frame, box)
         self._baseline, self._limit, self._frames = [], SHAPE_FLOOR, 0
         self._heights.clear()
+        self._exemplars.clear()
+        self._impostors.clear()
+        self._pending.clear()
+        self._good = 0
         self._start(frame, box)
         return Track("tracking", box, 1.0, 1.0)
 
@@ -419,9 +436,30 @@ class ObjectTracker:
         self._drift = self._drift + 1 if drifting else 0
         if self._drift >= DRIFT_FRAMES:
             return self._lose("drift")
-        if match > 0.8:
-            self._heights.append(box[3])
+        if match > 0.8 and self.tier == "colour":
+            self._remember(frame, box)
+        elif match <= 0.5:
+            self._pending.clear()  # whatever was seen just before may already have been wrong
         return Track("tracking", box, min(score, 1.0) * match, box[3] / self._ref_height)
+
+    def _remember(self, frame, box):
+        """Learn from a frame in which the object is certainly in the box: its looks, and the impostors around."""
+        self._good += 1
+        self._pending.append((self._good, "height", box[3]))
+        if self._good % EXEMPLAR_EVERY == 0:
+            self._pending.append((self._good, "view", _shape_hist(frame, box)))
+        if self._good % IMPOSTOR_EVERY == 0:
+            for blob in self.colour.blobs(self.colour.probability(frame)):
+                if _centre_distance(blob, box) > 1.5 * max(box[2], box[3]) and blob[3] > 0.5 * box[3]:
+                    self._pending.append((self._good, "impostor", _shape_hist(frame, blob)))
+        while self._pending and self._good - self._pending[0][0] >= COMMIT_AFTER:
+            _, kind, value = self._pending.popleft()
+            if kind == "height":
+                self._heights.append(value)
+            elif kind == "view":
+                self._exemplars.append(value)
+            elif all(_distance(value, other) > 0.05 for other in self._impostors):
+                self._impostors.append(value)
 
     def _check_plain(self, frame, box):
         """The drift check for an object without colour. Returns (drifting, how well it still matches 0..1)."""
@@ -443,30 +481,48 @@ class ObjectTracker:
         """Lost: for an object with colour, look for it in the whole frame."""
         if self.tier != "colour":
             return Track("lost", reason="track-only")
-        # Candidates must match in hue, in the shape of their edges and in size. Among them the one that
-        # looks most like the object wins: that comparison is relative, so a change of light, which moves
-        # all of them alike, does not matter.
-        scored = []
-        expected = float(np.median(self._heights)) if len(self._heights) >= 5 else self._ref_height
+        # Candidates must match in hue, in size (within what it measured while tracked well) and in the shape
+        # of their edges: as in some view it had while tracked, so turning the object does not matter, and
+        # more like it than like the look-alikes that were around. Among them the one that looks most like
+        # the object wins: that comparison is relative, so a change of light, which moves all of them alike,
+        # does not matter.
+        if len(self._heights) >= 10:
+            low, high = min(self._heights) / REDETECT_SIZE, max(self._heights) * REDETECT_SIZE
+        else:
+            low, high = self._ref_height / REDETECT_SIZE, self._ref_height * REDETECT_SIZE
+        views = [self._shape, *self._exemplars]
+        scored, turned_down = [], collections.Counter()
         for blob in self.colour.blobs(self.colour.probability(frame)):
-            if (1 / REDETECT_SIZE <= blob[3] / expected <= REDETECT_SIZE
-                    and _distance(self._reference, _hue_hist(frame, blob)) < REDETECT_HUE
-                    and _distance(self._shape, _shape_hist(frame, blob)) < REDETECT_SHAPE):
-                scored.append((_distance(self._look, _look_hist(frame, blob)), blob))
+            if not low <= blob[3] <= high:
+                turned_down["size"] += 1
+            elif _distance(self._reference, _hue_hist(frame, blob)) >= REDETECT_HUE:
+                turned_down["hue"] += 1
+            else:
+                shape = _shape_hist(frame, blob)
+                like_object = min(_distance(view, shape) for view in views)
+                like_impostor = min((_distance(other, shape) for other in self._impostors), default=1.0)
+                if like_object >= VIEW_LIMIT:
+                    turned_down["shape"] += 1
+                elif like_object + IMPOSTOR_MARGIN >= like_impostor:
+                    turned_down["impostor"] += 1
+                else:
+                    scored.append((_distance(self._look, _look_hist(frame, blob)), blob))
         scored.sort()
+        self.search_info = "%d candidates, turned down: %s, height wanted %.0f-%.0f, %d views, %d impostors" % (
+            len(scored) + sum(turned_down.values()), dict(turned_down) or "none", low, high, len(views), len(self._impostors))
         if not scored:
             self.reason, self._candidate, self._seen = "searching", None, 0
         elif len(scored) > 1 and scored[1][0] - scored[0][0] < REDETECT_MARGIN:
             self.reason, self._candidate, self._seen = "ambiguous", None, 0
         else:
             box = scored[0][1]
-            same = self._candidate is not None and _overlap(box, self._candidate) > 0.3
-            self._seen = self._seen + 1 if same else 1
+            near = self._candidate is not None and _centre_distance(box, self._candidate) < max(box[2], box[3])
+            self._seen = self._seen + 1 if near else 1
             self._candidate = box
             if self._seen >= REDETECT_FRAMES:
                 self._start(frame, box)
                 return Track("tracking", box, 1.0, box[3] / self._ref_height)
-            self.reason = "searching"
+            self.reason = "confirming"  # the camera holds still meanwhile
         return Track("lost", reason=self.reason)
 
 

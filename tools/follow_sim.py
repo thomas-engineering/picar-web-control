@@ -232,6 +232,14 @@ def main():
               min(r["pan"] for r in scan), max(r["pan"] for r in scan), min(r["tilt"] for r in scan), max(r["tilt"] for r in scan),
               "%.0f" % (gave_up - lost_at) if gave_up else "never", stopped))
 
+    # While a candidate is being confirmed the camera has to stand still, otherwise it scans on.
+    control = FollowControl(PAN_LIMITS, MAX_THROTTLE, TILT_LIMITS)
+    control.update(Track("tracking", (150, 110, 20, 20), 0.9, 1.0), (WIDTH, HEIGHT), 0.1, 90.0, 90.0, 0.0)
+    moving = control.update(Track("lost", reason="searching"), (WIDTH, HEIGHT), 0.1, 90.0, 90.0, 1.5)
+    still = control.update(Track("lost", reason="confirming"), (WIDTH, HEIGHT), 0.1, 90.0, 90.0, 1.6)
+    check("camera stands still while a candidate is confirmed", moving.pan_rate != 0 and still.pan_rate == 0 and still.tilt_rate == 0 and still.throttle == 0,
+          "scanning pan rate %.2f, confirming %.2f" % (moving.pan_rate, still.pan_rate))
+
     # The target jumps to the side and above the camera's view: only the scan can find it again.
     for label, jump_x, jump_elevation in (("aside and above", 0.9, 30.0), ("aside and below", -0.9, -30.0), ("straight above", 0.0, 32.0)):
         run = Run(lambda t, jx=jump_x: (jx if t > 3 else 0.0, 0.6),

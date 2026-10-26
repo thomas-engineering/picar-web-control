@@ -50,6 +50,13 @@ def perturb(image, kind):
     return np.clip(f, 0, 255).astype(np.uint8)
 
 
+def zoom(image, factor):
+    """The picture as if everything were closer (factor above 1) or farther (below 1)."""
+    h, w = image.shape[:2]
+    matrix = np.array([[factor, 0, (1 - factor) * w / 2], [0, factor, (1 - factor) * h / 2]], np.float32)
+    return cv2.warpAffine(image, matrix, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=(60, 50, 50))
+
+
 def load(clip):
     return [cv2.imread(f) for f in sorted(glob.glob(os.path.join(ROOT, "clips", clip, "*.jpg")))]
 
@@ -119,6 +126,19 @@ def main():
         check("grey cube: cannot be saved", False)
     except ValueError:
         check("grey cube: cannot be saved", True)
+
+    # The disc comes back from under the hand much closer or farther away than before.
+    for factor in (1.5, 1.8, 0.8, 0.7):
+        tracker = ObjectTracker(models)
+        tracker.learn(ball[0], DISC_START)
+        tracks = [tracker.update(zoom(f, factor) if i >= 250 else f) for i, f in enumerate(ball)]
+        lost = next((i for i, t in enumerate(tracks) if t.state == "lost"), None)
+        back = next((i for i, t in enumerate(tracks) if lost is not None and i > lost and t.state == "tracking"), None)
+        on_disc = [i for i in (317, 362, 453, 499) if tracks[i].state == "tracking"
+                   and abs(centre(tracks[i])[0] - ((DISC_AT[i][0] - 160) * factor + 160)) < 18
+                   and abs(centre(tracks[i])[1] - ((DISC_AT[i][1] - 120) * factor + 120)) < 18]
+        check("disc back %.1fx the size: found, and on the disc" % factor, back is not None and back <= 300 and len(on_disc) == 4,
+              "found again at %s, on the disc at %d of 4 checkpoints" % (back, len(on_disc)))
 
     # The same clips in other light: no false alarm, and the hand is still noticed.
     for kind in ("gain0.6", "gain1.6", "warm", "cool", "gamma0.7", "gamma1.5", "sat"):
