@@ -3,7 +3,7 @@
 State at the end of the follow-mode session (2026-10-27): follow mode is built, deployed and
 tested with the car on a box. Camera directions, steering direction, forward drive and every stop
 path worked. Driving is switched off on the Pi (`PICAR_FOLLOW_DRIVE` unset), so follow mode only
-moves the camera. Nothing has been pushed to GitHub; all commits are local.
+moves the camera. Everything up to the power-supply fix was pushed to GitHub on 2026-10-28.
 
 ## Before the car drives on the floor
 
@@ -75,8 +75,8 @@ auto exposure and auto white balance cannot be locked. Raw YUYV only, 640x480 at
 
 ## Housekeeping
 
-- [ ] Push the commits to GitHub (`git push`) when the user says so. Check `git log` and that no
-      address, SSID or key path is in the files first.
+- [x] Pushed on 2026-10-28 after checking the files and history for addresses, SSIDs and key paths.
+      Do the same check before each later push, and push only when the user says so.
 - [ ] `tools/lag_test.py` needs the Pi's IPv4 address as `--host`: the name `picar1.fritz.box`
       resolves first to a stale IPv6 address of the switched-off onboard radio. Clean the stale
       router entry and reserve an address for the USB adapter in the router.
