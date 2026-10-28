@@ -7,11 +7,11 @@ moves the camera. Nothing has been pushed to GitHub; all commits are local.
 
 ## Before the car drives on the floor
 
-- [ ] **Fix the power supply.** The Pi logged undervoltage events during the wheels-off drive test
-      (and once under tracker load alone). A reboot while the motors run can leave them running,
-      because the motor driver keeps its last setting. Raise the supply voltage within the board's
-      limit, or use a stronger supply or batteries. Check with `dmesg -T | grep -i voltage` and
-      `vcgencmd get_throttled` (`0x0` is clean) while the motors run under tracker load.
+- [x] **Fix the power supply.** Done 2026-10-28: the cause was a poor connector. With a lab supply
+      at 8.5 V (2 A limit, the car drew at most 0.8 A) `tools/power_stress.py` passes: no undervoltage,
+      throttling or reboot in any stage, including full-speed reversals. Before the fix the same
+      supply at 8.1 V and 8.5 V gave undervoltage as soon as the motors ran. Still to do: run the
+      test again on the car's own battery (`power-stress-test` skill, wheels off the ground).
 - [ ] **Run the safety review** of follow mode from `CODE_REVIEW_PLAN.md` (`/code-review high` or
       `max`, ideally after `/model` to Opus 5.5): watchdog paths in `control.py`, `follower.py`,
       the cancel conditions, the speed cap. It has not been run yet.
