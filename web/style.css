@@ -103,6 +103,8 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
+.ip { opacity: .6; }
+.ip:empty { display: none; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); flex: none; }
 .dot.ok { background: var(--ok); }
 .dot.warn { background: var(--warn); }

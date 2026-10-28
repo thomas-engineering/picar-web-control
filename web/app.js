@@ -186,9 +186,15 @@ let status = "connecting";
 function setStatus(s) {
   status = s;
   $("takeover").hidden = s !== "taken";
-  if (s === "open") startVideo();
+  if (s === "open") { startVideo(); showIp(); }
   if (s === "taken") { video.removeAttribute("src"); releaseAll(); }
   refreshIndicator();
+}
+async function showIp() {
+  try {
+    const st = await (await fetch("/api/status")).json();
+    $("ip").textContent = st.ip || "";
+  } catch { /* keep the last value */ }
 }
 function refreshIndicator() {
   const st = link.stats();

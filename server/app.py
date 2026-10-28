@@ -9,8 +9,9 @@ import dataclasses
 import json
 import logging
 import os
+import socket
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -95,10 +96,21 @@ class CalibrationUpdate(BaseModel):
     max_speed: int | None = Field(None, ge=0, le=100)
 
 
+def own_ip():
+    """The Pi's IPv4 address on its default route (a UDP connect sends nothing), or None."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("192.0.2.1", 9))
+            return sock.getsockname()[0]
+    except OSError:
+        return None
+
+
 @app.get("/api/status")
-def status():
+def status(request: Request):
     cam = app.state.camera
     return {
+        "ip": own_ip() or request.scope["server"][0],
         **app.state.controller.status(),
         "viewers": cam.viewers,
         "follow": app.state.follower.status(),
